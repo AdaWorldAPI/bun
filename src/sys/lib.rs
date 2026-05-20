@@ -199,8 +199,9 @@ pub mod dir_iterator {
         #[cfg(not(windows))]
         #[inline]
         fn borrow(s: &[u8]) -> Name {
-            // The kernel guarantees `s.as_ptr().add(s.len())` reads `0` (the
-            // dirent record's NUL terminator lies inside `reclen`).
+            // SAFETY: the kernel guarantees `s.as_ptr().add(s.len())` reads
+            // `0` (the dirent record's NUL terminator lies inside `reclen`),
+            // so the one-past-the-end read is in-bounds of the dirent.
             debug_assert!(unsafe { *s.as_ptr().add(s.len()) } == 0);
             Name {
                 ptr: core::ptr::NonNull::from(s).cast(),
@@ -289,6 +290,9 @@ pub mod dir_iterator {
         #[inline(always)]
         unsafe fn filled(&self, len: usize) -> &[u8] {
             debug_assert!(len <= BUF_SIZE);
+            // SAFETY: caller's contract (per fn doc) guarantees bytes
+            // `[0..len]` are initialized; `len <= BUF_SIZE` keeps the
+            // slice in-bounds of the backing `MaybeUninit<[u8; BUF_SIZE]>`.
             unsafe { core::slice::from_raw_parts(self.0.as_ptr().cast::<u8>(), len) }
         }
     }
@@ -3760,6 +3764,8 @@ mod windows_impl {
         // sys.zig:3911 — DuplicateHandle on the underlying HANDLE.
         let process = w::kernel32::GetCurrentProcess();
         let mut target: w::HANDLE = core::ptr::null_mut();
+        // SAFETY: `process` is the current-process pseudo-handle; `fd` is a valid HANDLE in that
+        // process; `target` is a local pointer-slot valid for the output HANDLE.
         let out = unsafe {
             w::kernel32::DuplicateHandle(
                 process,
@@ -3785,6 +3791,7 @@ mod windows_impl {
     pub fn getcwd(buf: &mut [u8]) -> Maybe<usize> {
         // sys.zig:349 — GetCurrentDirectoryW + WTF16→UTF8.
         let mut wbuf = WPathBuffer::default();
+        // SAFETY: `wbuf` is a mutable buffer of `wbuf.len()` wide chars valid for the call.
         let len =
             unsafe { w::kernel32::GetCurrentDirectoryW(wbuf.len() as u32, wbuf.as_mut_ptr()) };
         if len == 0 {
@@ -4085,6 +4092,7 @@ mod windows_impl {
         const W_OK: i32 = 2;
         let mut wbuf = WPathBuffer::default();
         let wpath = bun_paths::string_paths::to_kernel32_path(&mut wbuf, path.as_bytes());
+        // SAFETY: `wpath` is a NUL-terminated wide string valid for the duration of the call.
         let attrs = unsafe { w::kernel32::GetFileAttributesW(wpath.as_ptr()) };
         if attrs == w::INVALID_FILE_ATTRIBUTES {
             return Err(Error::new(w::get_last_errno(), Tag::access).with_path(path.as_bytes()));
@@ -4121,6 +4129,8 @@ mod windows_impl {
         let a = atime.sec as f64 + atime.nsec as f64 / 1e9;
         let m = mtime.sec as f64 + mtime.nsec as f64 / 1e9;
         let mut req = uv::fs_t::uninitialized();
+        // SAFETY: `req` is a local `fs_t` valid for the synchronous call; `uvfd` is a valid
+        // libuv CRT file descriptor; callback is `None` (synchronous mode).
         let rc =
             unsafe { uv::uv_fs_futime(core::ptr::null_mut(), &mut req, uvfd.uv(), a, m, None) };
         // Zig: `defer req.deinit()` — fs_t has no Drop impl; uv_fs_req_cleanup
@@ -4136,6 +4146,8 @@ mod windows_impl {
         let a = atime.sec as f64 + atime.nsec as f64 / 1e9;
         let m = mtime.sec as f64 + mtime.nsec as f64 / 1e9;
         let mut req = uv::fs_t::uninitialized();
+        // SAFETY: `req` is a local `fs_t` valid for the synchronous call; `path` is a valid
+        // NUL-terminated C string; callback is `None` (synchronous mode).
         let rc = unsafe {
             uv::uv_fs_utime(
                 core::ptr::null_mut(),
@@ -4160,6 +4172,8 @@ mod windows_impl {
         let a = atime.sec as f64 + atime.nsec as f64 / 1e9;
         let m = mtime.sec as f64 + mtime.nsec as f64 / 1e9;
         let mut req = uv::fs_t::uninitialized();
+        // SAFETY: `req` is a local `fs_t` valid for the synchronous call; `path` is a valid
+        // NUL-terminated C string; callback is `None` (synchronous mode).
         let rc = unsafe {
             uv::uv_fs_lutime(
                 core::ptr::null_mut(),
@@ -4208,6 +4222,7 @@ mod windows_impl {
     pub fn get_file_size(fd: Fd) -> Maybe<u64> {
         // sys.zig:4140 — GetFileSizeEx.
         let mut size: i64 = 0;
+        // SAFETY: `fd` is a valid Windows HANDLE; `size` is a local i64 valid for the output pointer.
         let ok = unsafe { w::kernel32::GetFileSizeEx(fd.native() as w::HANDLE, &mut size) };
         if ok == 0 {
             return Err(Error::new(w::get_last_errno(), Tag::fstat).with_fd(fd));
@@ -4231,6 +4246,7 @@ mod windows_impl {
     pub fn pipe() -> Maybe<[Fd; 2]> {
         // sys.zig:3839 — windows: uv_pipe(fds, 0, 0).
         let mut fds: [uv::uv_file; 2] = [-1, -1];
+        // SAFETY: `fds` is a local array valid for libuv to write into; flags 0 = non-inheritable.
         let rc = unsafe { uv::uv_pipe(&mut fds, 0, 0) };
         if let Some(err) = Error::from_uv_rc(rc, Tag::pipe) {
             return Err(err);
@@ -4251,6 +4267,7 @@ mod windows_impl {
     pub fn lseek(fd: Fd, offset: i64, whence: i32) -> Maybe<i64> {
         // sys.zig:2339 — windows: SetFilePointerEx.
         let mut new: i64 = 0;
+        // SAFETY: `fd` is a valid Windows HANDLE; `new` is a local i64 valid for the output pointer.
         let ok = unsafe {
             w::SetFilePointerEx(fd.native() as w::HANDLE, offset, &mut new, whence as u32)
         };
@@ -4303,6 +4320,7 @@ mod windows_impl {
         // before the `usize → i32` cast — otherwise ≥2 GiB buffers wrap to a
         // negative length and Winsock fails with WSAEFAULT.
         let len = buf.len().min(i32::MAX as usize) as i32;
+        // SAFETY: `buf` is a valid mutable slice of `len` bytes; `fd` is a valid Winsock socket.
         let rc =
             unsafe { w::ws2_32::recv(fd.native() as _, buf.as_mut_ptr().cast::<_>(), len, flags) };
         if rc < 0 {
@@ -4316,6 +4334,7 @@ mod windows_impl {
         // sys.zig:2294 — windows: winsock `send`. Clamp to `i32::MAX` so the
         // `usize → i32` cast can't wrap to a negative length on huge buffers.
         let len = buf.len().min(i32::MAX as usize) as i32;
+        // SAFETY: `buf` is a valid slice of `len` bytes; `fd` is a valid Winsock socket.
         let rc = unsafe { w::ws2_32::send(fd.native() as _, buf.as_ptr().cast::<_>(), len, flags) };
         if rc < 0 {
             return Err(
@@ -4439,6 +4458,8 @@ pub fn pwritev(fd: Fd, vecs: &[PlatformIoVecConst], offset: i64) -> Maybe<usize>
         {
             // sys.zig:1955-1964 — `.mac` arm: single `pwritev$NOCANCEL`, no
             // EINTR retry (surfaces EINTR to caller).
+            // SAFETY: `PlatformIoVecConst` is layout-identical to `libc::iovec` (asserted);
+            // `vecs` slice is valid for the duration of the call; `fd` is a valid open descriptor.
             let rc = unsafe {
                 nocancel::pwritev(
                     fd.native(),
@@ -4462,6 +4483,8 @@ pub fn pwritev(fd: Fd, vecs: &[PlatformIoVecConst], offset: i64) -> Maybe<usize>
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
         loop {
+            // SAFETY: `PlatformIoVecConst` is layout-identical to `libc::iovec` (asserted);
+            // `vecs` slice is valid for the duration of the call; `fd` is a valid open descriptor.
             let rc = unsafe {
                 libc::pwritev(
                     fd.native(),
@@ -4910,6 +4933,8 @@ pub mod c {
     /// libc `dlsym` (RTLD_DEFAULT when `handle` is null).
     #[cfg(unix)]
     pub unsafe fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void {
+        // SAFETY: outer `unsafe fn` propagates the caller's contract; `name` must be a valid
+        // NUL-terminated C string and `handle` a live `dlopen` handle (or null for RTLD_DEFAULT).
         unsafe { libc::dlsym(handle, name) }
     }
     #[cfg(unix)]
@@ -5098,6 +5123,7 @@ pub mod c {
         nevents: c_int,
         timeout: *const libc::timespec,
     ) -> c_int {
+        // SAFETY: outer `unsafe fn` propagates the caller's contract; thin libc forward.
         unsafe { libc::kevent(kq, changelist, nchanges, eventlist, nevents, timeout) }
     }
 
@@ -5115,6 +5141,7 @@ pub mod c {
         hdtr: *mut c_void,
         flags: c_int,
     ) -> c_int {
+        // SAFETY: outer `unsafe fn` propagates the caller's contract; thin libc forward.
         unsafe { libc::sendfile(fd, s, off, len, hdtr.cast(), flags) }
     }
     /// FreeBSD `sendfile(fd, s, off, nbytes, *hdtr, *sbytes, flags)`.
@@ -5128,6 +5155,7 @@ pub mod c {
         sbytes: *mut i64,
         flags: c_int,
     ) -> c_int {
+        // SAFETY: outer `unsafe fn` propagates the caller's contract; thin libc forward.
         unsafe { libc::sendfile(fd, s, off, nbytes, hdtr.cast(), sbytes, flags) }
     }
 
@@ -5151,6 +5179,7 @@ pub mod c {
     #[cfg(unix)]
     #[inline]
     pub unsafe fn fork() -> libc::pid_t {
+        // SAFETY: outer `unsafe fn` propagates the caller's contract; thin libc forward.
         unsafe { libc::fork() }
     }
 
@@ -5348,6 +5377,8 @@ pub mod linux {
     // ThreadPool worker panics inside its idle wait.
     #[inline]
     pub unsafe fn futex_3arg(uaddr: *const u32, op: FutexOp, val: u32) -> isize {
+        // SAFETY: outer `unsafe fn` propagates the caller's contract; `uaddr` must point to a
+        // valid u32 futex word.  `SYS_futex` with FUTEX_WAKE takes `uaddr`, `op`, and `val`.
         let rc = unsafe { libc::syscall(libc::SYS_futex, uaddr, op.raw(), val) };
         if rc == -1 {
             -(errno() as isize)
@@ -5363,6 +5394,8 @@ pub mod linux {
         val: u32,
         timeout: *const timespec,
     ) -> isize {
+        // SAFETY: outer `unsafe fn` propagates the caller's contract; `uaddr` must point to a
+        // valid u32 futex word; `timeout` may be null or a valid `timespec`.
         let rc = unsafe { libc::syscall(libc::SYS_futex, uaddr, op.raw(), val, timeout) };
         if rc == -1 {
             -(errno() as isize)
@@ -5403,6 +5436,8 @@ pub mod linux {
     }
     #[inline]
     pub unsafe fn inotify_add_watch(fd: c_int, path: *const c_char, mask: u32) -> c_int {
+        // SAFETY: outer `unsafe fn` propagates the caller's contract; `path` must be a valid
+        // NUL-terminated C string and `fd` a valid inotify file descriptor.
         unsafe { libc::inotify_add_watch(fd, path, mask) }
     }
     #[inline]
@@ -5415,6 +5450,8 @@ pub mod linux {
     /// Raw `read(2)` returning kernel `usize` (Zig: `std.os.linux.read`).
     #[inline]
     pub unsafe fn read(fd: c_int, buf: *mut u8, count: usize) -> isize {
+        // SAFETY: outer `unsafe fn` propagates the caller's contract; `buf` must be valid for
+        // `count` bytes of writes, and `fd` must be a valid open descriptor.
         // Raw syscall via rustix; libc-convention return preserved for callers
         // that decode via `GetErrno for isize`.
         unsafe { super::linux_syscall::read_raw(fd, buf, count) }
@@ -5422,6 +5459,8 @@ pub mod linux {
     /// Raw `sendfile(out, in, *offset, count)` (Zig: `std.os.linux.sendfile`).
     #[inline]
     pub unsafe fn sendfile(out_fd: c_int, in_fd: c_int, offset: *mut i64, count: usize) -> isize {
+        // SAFETY: outer `unsafe fn` propagates the caller's contract; `out_fd`/`in_fd` must be
+        // valid open descriptors; `offset` may be null or point to a valid `i64`.
         unsafe { super::linux_syscall::sendfile(out_fd, in_fd, offset, count) }
     }
     /// Raw `ppoll(fds, nfds, *timeout, *sigmask)`.
@@ -5432,10 +5471,14 @@ pub mod linux {
         timeout: *const libc::timespec,
         sigmask: *const libc::sigset_t,
     ) -> c_int {
+        // SAFETY: outer `unsafe fn` propagates the caller's contract; `fds` must be a valid
+        // array of `nfds` `pollfd` structs; `timeout` and `sigmask` may be null.
         unsafe { libc::ppoll(fds, nfds as _, timeout, sigmask) }
     }
     #[inline]
     pub unsafe fn epoll_ctl(epfd: c_int, op: c_int, fd: c_int, event: *mut epoll_event) -> c_int {
+        // SAFETY: outer `unsafe fn` propagates the caller's contract; `epfd`/`fd` must be valid
+        // open descriptors; `event` must be valid for `EPOLL_CTL_ADD`/`MOD` or null for `DEL`.
         unsafe { super::linux_syscall::epoll_ctl(epfd, op, fd, event) }
     }
 
@@ -5703,6 +5746,7 @@ pub mod darwin {
     /// `addr` must point to readable memory of at least 4 bytes (the futex word).
     #[inline]
     pub unsafe fn __ulock_wait(flags: UL, addr: *const c_void, value: u64, timeout_us: u32) -> i32 {
+        // SAFETY: outer `unsafe fn` propagates the caller's contract; thin forward to the raw `extern` declaration.
         unsafe { __ulock_wait_raw(flags.bits(), addr, value, timeout_us) }
     }
     /// # Safety
@@ -5715,12 +5759,14 @@ pub mod darwin {
         timeout_ns: u64,
         value2: u64,
     ) -> i32 {
+        // SAFETY: outer `unsafe fn` propagates the caller's contract; thin forward to the raw `extern` declaration.
         unsafe { __ulock_wait2_raw(flags.bits(), addr, value, timeout_ns, value2) }
     }
     /// # Safety
     /// See `__ulock_wait`.
     #[inline]
     pub unsafe fn __ulock_wake(flags: UL, addr: *const c_void, wake_value: u64) -> i32 {
+        // SAFETY: outer `unsafe fn` propagates the caller's contract; thin forward to the raw `extern` declaration.
         unsafe { __ulock_wake_raw(flags.bits(), addr, wake_value) }
     }
 
@@ -5738,6 +5784,7 @@ pub mod darwin {
         flags: core::ffi::c_uint,
         timeout: *const libc::timespec,
     ) -> core::ffi::c_int {
+        // SAFETY: outer `unsafe fn` propagates the caller's contract; thin libc forward.
         unsafe { libc::kevent64(kq, changelist, nchanges, eventlist, nevents, flags, timeout) }
     }
 
@@ -5988,6 +6035,8 @@ impl DynLib {
     }
     pub fn close(self) {
         #[cfg(unix)]
+        // SAFETY: `self.handle` was returned by `dlopen` and is valid; `dlclose` requires
+        // that the handle not be used after this call, which is enforced by consuming `self`.
         unsafe {
             libc::dlclose(self.handle);
         }
@@ -7865,6 +7914,7 @@ pub mod posix {
     #[cfg(unix)]
     #[inline]
     pub unsafe fn sigaction(sig: c_int, act: *const Sigaction, oact: *mut Sigaction) -> c_int {
+        // SAFETY: outer `unsafe fn` propagates the syscall's safety contract; thin forward to libc.
         unsafe { libc::sigaction(sig, act, oact) }
     }
 
@@ -7888,10 +7938,13 @@ pub mod posix {
     pub unsafe fn read(fd: c_int, buf: *mut u8, count: usize) -> isize {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         {
+            // SAFETY: outer `unsafe fn` propagates the caller's contract; `buf`/`count` are the
+            // caller's responsibility, and `fd` must be a valid open descriptor.
             unsafe { super::linux_syscall::read_raw(fd, buf, count) }
         }
         #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
+            // SAFETY: outer `unsafe fn` propagates the caller's contract; thin libc forward.
             unsafe { libc::read(fd, buf.cast(), count) }
         }
     }
@@ -7900,10 +7953,13 @@ pub mod posix {
     pub unsafe fn write(fd: c_int, buf: *const u8, count: usize) -> isize {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         {
+            // SAFETY: outer `unsafe fn` propagates the caller's contract; `buf`/`count` are the
+            // caller's responsibility, and `fd` must be a valid open descriptor.
             unsafe { super::linux_syscall::write_raw(fd, buf, count) }
         }
         #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
+            // SAFETY: outer `unsafe fn` propagates the caller's contract; thin libc forward.
             unsafe { libc::write(fd, buf.cast(), count) }
         }
     }
@@ -7935,6 +7991,7 @@ pub mod posix {
             let rc = unsafe {
                 super::nocancel::poll(fds.as_mut_ptr().cast(), fds.len() as _, timeout_ms)
             };
+            // SAFETY: `PollFd` is layout-identical to `libc::pollfd`; slice gives valid ptr + len.
             #[cfg(not(target_os = "macos"))]
             let rc = unsafe { libc::poll(fds.as_mut_ptr().cast(), fds.len() as _, timeout_ms) };
             if rc < 0 {
@@ -8037,6 +8094,7 @@ pub mod posix {
         callback: unsafe extern "C" fn(*mut libc::dl_phdr_info, usize, *mut c_void) -> c_int,
         data: *mut c_void,
     ) -> c_int {
+        // SAFETY: outer `unsafe fn` propagates the syscall's safety contract; thin forward to libc.
         unsafe { libc::dl_iterate_phdr(Some(callback), data) }
     }
 }
@@ -8162,12 +8220,16 @@ pub mod net {
         /// Construct from a borrowed `*const sockaddr` (Zig: `Address.initPosix`).
         /// SAFETY: `addr` must point at a valid sockaddr of the family it declares.
         pub unsafe fn init_posix(addr: *const sockaddr) -> Self {
+            // SAFETY: `sockaddr_storage` has no invalid bit patterns; zeroing is a valid init.
             let mut storage: sockaddr_storage = unsafe { bun_core::ffi::zeroed_unchecked() };
+            // SAFETY: outer `unsafe fn` guarantees `addr` points at a valid sockaddr.
             let len = match unsafe { (*addr).sa_family } as i32 {
                 AF_INET => core::mem::size_of::<sockaddr_in>(),
                 AF_INET6 => core::mem::size_of::<sockaddr_in6>(),
                 _ => core::mem::size_of::<sockaddr>(),
             };
+            // SAFETY: `addr` is valid for `len` bytes per the family match above; `storage` has
+            // capacity >= `sockaddr_storage` which is >= any sockaddr variant by POSIX guarantee.
             unsafe {
                 core::ptr::copy_nonoverlapping(
                     addr.cast::<u8>(),
@@ -8190,11 +8252,9 @@ pub mod net {
         #[inline]
         pub fn as_in4(&self) -> Option<&sock::sockaddr_in> {
             if self.family() == AF_INET {
-                // SAFETY: `ss_family == AF_INET` ⇒ `any` was written as a
-                // `sockaddr_in`; `sockaddr_storage` is guaranteed by POSIX/
-                // ws2def.h to have size and alignment >= `sockaddr_in`, and
-                // the family field overlays at offset 0. Reborrowing the
-                // storage at the narrower type is the canonical sockaddr view.
+                // SAFETY: `ss_family == AF_INET` guarantees `any` holds a valid `sockaddr_in`;
+                // `sockaddr_storage` has size/alignment >= `sockaddr_in` (POSIX), family at
+                // offset 0 — casting and reborrowing is the canonical sockaddr pattern.
                 Some(unsafe { &*(&raw const self.any).cast::<sock::sockaddr_in>() })
             } else {
                 None
@@ -8412,6 +8472,7 @@ pub mod freebsd {
         nevents: c_int,
         timeout: *const libc::timespec,
     ) -> c_int {
+        // SAFETY: outer `unsafe fn` propagates the syscall's safety contract; thin forward to libc.
         unsafe { libc::kevent(kq, changelist, nchanges, eventlist, nevents, timeout) }
     }
     /// `std.c.copy_file_range` (FreeBSD 13+). Thin re-export so callers don't
@@ -8428,6 +8489,7 @@ pub mod freebsd {
         len: usize,
         flags: u32,
     ) -> libc::ssize_t {
+        // SAFETY: outer `unsafe fn` propagates the syscall's safety contract; thin forward to libc.
         unsafe { libc::copy_file_range(in_, off_in, out, off_out, len, flags) }
     }
 }
@@ -9208,6 +9270,10 @@ unsafe fn adapter_write_all(
             return Ok(());
         }
     }
+    // SAFETY: `bytes.len()` is checked to fit (`this.pos + bytes.len() <= this.cap`
+    // above) and `this.buf.add(this.pos)` lies inside the `[0..cap)` range owned by
+    // `this`; src and dst regions are disjoint (`bytes` comes from the caller, `buf`
+    // is the adapter's internal buffer).
     unsafe {
         core::ptr::copy_nonoverlapping(bytes.as_ptr(), this.buf.add(this.pos), bytes.len());
     }

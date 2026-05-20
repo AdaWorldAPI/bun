@@ -398,14 +398,22 @@ unsafe impl<U> Atom for *mut U {
 unsafe impl<U> Atom for *const U {
     #[inline]
     unsafe fn _atomic_load(p: *mut Self, ord: Ordering) -> Self {
+        // SAFETY: `*const U` and `*mut U` have identical representation;
+        // `AtomicPtr<U>` is the native atomic backing for pointer-sized
+        // values. `p` is 8-aligned and points to a live `*const U` cell,
+        // forwarded from `AtomicCell`.
         unsafe { (*(p as *const AtomicPtr<U>)).load(ord) as *const U }
     }
     #[inline]
     unsafe fn _atomic_store(p: *mut Self, v: Self, ord: Ordering) {
+        // SAFETY: same cast as `_atomic_load`; `*const U` and `*mut U` have
+        // identical representation; `p` is 8-aligned and live.
         unsafe { (*(p as *const AtomicPtr<U>)).store(v as *mut U, ord) }
     }
     #[inline]
     unsafe fn _atomic_swap(p: *mut Self, v: Self, ord: Ordering) -> Self {
+        // SAFETY: same cast as `_atomic_load`; `*const U` and `*mut U` have
+        // identical representation; `p` is 8-aligned and live.
         unsafe { (*(p as *const AtomicPtr<U>)).swap(v as *mut U, ord) as *const U }
     }
     #[inline]
@@ -416,6 +424,10 @@ unsafe impl<U> Atom for *const U {
         s: Ordering,
         f: Ordering,
     ) -> Result<Self, Self> {
+        // SAFETY: `*const U` and `*mut U` have identical representation;
+        // `AtomicPtr<U>` is the native atomic backing for pointer-sized
+        // values. `p` is 8-aligned and points to a live `*const U` cell,
+        // forwarded from `AtomicCell`.
         unsafe {
             match (*(p as *const AtomicPtr<U>)).compare_exchange(cur as *mut U, new as *mut U, s, f)
             {
@@ -437,14 +449,22 @@ fn nn_to_raw<U>(v: Option<NonNull<U>>) -> *mut U {
 unsafe impl<U> Atom for Option<NonNull<U>> {
     #[inline]
     unsafe fn _atomic_load(p: *mut Self, ord: Ordering) -> Self {
+        // SAFETY: `Option<NonNull<U>>` has the same layout as `*mut U`
+        // (null-pointer niche), so `p as *const AtomicPtr<U>` is a valid
+        // aligned reference. `p` is forwarded from `AtomicCell` which
+        // guarantees 8-byte alignment and a live, initialized value.
         NonNull::new(unsafe { (*(p as *const AtomicPtr<U>)).load(ord) })
     }
     #[inline]
     unsafe fn _atomic_store(p: *mut Self, v: Self, ord: Ordering) {
+        // SAFETY: same layout cast as `_atomic_load`; `p` is 8-aligned and
+        // points to a live `Option<NonNull<U>>` cell.
         unsafe { (*(p as *const AtomicPtr<U>)).store(nn_to_raw(v), ord) }
     }
     #[inline]
     unsafe fn _atomic_swap(p: *mut Self, v: Self, ord: Ordering) -> Self {
+        // SAFETY: same layout cast as `_atomic_load`; `p` is 8-aligned and
+        // points to a live `Option<NonNull<U>>` cell.
         NonNull::new(unsafe { (*(p as *const AtomicPtr<U>)).swap(nn_to_raw(v), ord) })
     }
     #[inline]
@@ -455,6 +475,10 @@ unsafe impl<U> Atom for Option<NonNull<U>> {
         s: Ordering,
         f: Ordering,
     ) -> Result<Self, Self> {
+        // SAFETY: `Option<NonNull<U>>` has the same layout as `*mut U`
+        // (null-pointer niche), so `p as *const AtomicPtr<U>` is a valid
+        // aligned reference. The pointer was forwarded from `AtomicCell`
+        // which guarantees 8-byte alignment and a live value.
         unsafe {
             match (*(p as *const AtomicPtr<U>)).compare_exchange(
                 nn_to_raw(cur),
@@ -624,6 +648,7 @@ mod tests {
         let c: AtomicCell<Option<NonNull<u32>>> = AtomicCell::new(None);
         assert!(c.load().is_none());
         c.store(NonNull::new(&mut x));
+        // SAFETY: `x` is still live; `c` holds the only pointer to it.
         assert_eq!(unsafe { *c.load().unwrap().as_ptr() }, 5);
     }
 

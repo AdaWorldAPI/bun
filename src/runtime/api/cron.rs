@@ -1276,6 +1276,7 @@ impl CronRemoveJob {
             Ok(v) => v,
             Err(_) => {
                 s.set_err(format_args!("Out of memory"));
+                // SAFETY: outer `unsafe fn` — `this` is the Box-allocated job; `finish` consumes it.
                 return unsafe { Self::finish(this) };
             }
         };
@@ -1287,6 +1288,7 @@ impl CronRemoveJob {
             b"/f\0".as_ptr().cast(),
             core::ptr::null(),
         ];
+        // SAFETY: outer `unsafe fn` — `this` is valid; `spawn_cmd` may consume it on error.
         unsafe { Self::spawn_cmd(this, &mut argv, spawn::Stdio::Ignore, spawn::Stdio::Ignore) };
         drop(task_name);
     }
@@ -1371,9 +1373,11 @@ impl CronJob {
     /// whose generated trait `destroy` upholds the sole-owner contract.
     fn destroy_impl(this: *mut Self) {
         // deinit: this_value.deinit() then destroy.
-        // SAFETY: last ref; nobody else holds a pointer.
         // PORT NOTE: `JsRef::deinit()` was dropped — Strong's Drop on
         // reassignment handles teardown (JSRef.rs trailer).
+        // SAFETY: refcount reached zero — `this` is the sole live pointer to
+        // the Box-allocated CronJob; deref of `(*this)` is valid, and
+        // `heap::take` consumes the allocation.
         unsafe {
             (*this).this_value.set(JsRef::empty());
             drop(bun_core::heap::take(this));
@@ -1836,6 +1840,9 @@ bun_jsc::jsc_host_abi! {
         global: *mut JSGlobalObject,
         frame: *mut CallFrame,
     ) -> JSValue {
+        // SAFETY: JSC C ABI — `global` and `frame` are valid non-null pointers
+        // provided by the engine on the JS thread; the borrows last only for
+        // this call.
         let (global, frame) = unsafe { (&*global, &*frame) };
         jsc::host_fn::to_js_host_fn_result(global, on_promise_resolve(global, frame))
     }
@@ -1846,6 +1853,9 @@ bun_jsc::jsc_host_abi! {
         global: *mut JSGlobalObject,
         frame: *mut CallFrame,
     ) -> JSValue {
+        // SAFETY: JSC C ABI — `global` and `frame` are valid non-null pointers
+        // provided by the engine on the JS thread; the borrows last only for
+        // this call.
         let (global, frame) = unsafe { (&*global, &*frame) };
         jsc::host_fn::to_js_host_fn_result(global, on_promise_reject(global, frame))
     }
@@ -2005,6 +2015,7 @@ impl SpawnCmdTarget for CronRegisterJob {
         CronRegisterJob::set_err(self, args)
     }
     unsafe fn finish(this: *mut Self) {
+        // SAFETY: outer `unsafe fn` propagates the sole-owner contract to `CronRegisterJob::finish`.
         unsafe { CronRegisterJob::finish(this) }
     }
     fn process_slot(&mut self) -> &mut Option<*mut Process> {
@@ -2026,6 +2037,7 @@ impl SpawnCmdTarget for CronRemoveJob {
         CronRemoveJob::set_err(self, args)
     }
     unsafe fn finish(this: *mut Self) {
+        // SAFETY: outer `unsafe fn` propagates the sole-owner contract to `CronRemoveJob::finish`.
         unsafe { CronRemoveJob::finish(this) }
     }
     fn process_slot(&mut self) -> &mut Option<*mut Process> {
@@ -2082,6 +2094,7 @@ unsafe fn spawn_cmd_generic<T: SpawnCmdTarget>(
                     "Could not find '{}' in PATH",
                     bstr::BStr::new(argv0)
                 ));
+                // SAFETY: outer `unsafe fn` — `this` is the Box-allocated job; `T::finish` consumes it.
                 return unsafe { T::finish(this) };
             }
         }
@@ -2107,6 +2120,7 @@ unsafe fn spawn_cmd_generic<T: SpawnCmdTarget>(
             }
             Err(_) => {
                 s.set_err(format_args!("Failed to create environment block"));
+                // SAFETY: outer `unsafe fn` — `this` is the Box-allocated job; `T::finish` consumes it.
                 return unsafe { T::finish(this) };
             }
         }
@@ -2168,12 +2182,14 @@ unsafe fn spawn_cmd_generic<T: SpawnCmdTarget>(
                 "Failed to spawn process: {}",
                 bstr::BStr::new(err.name())
             ));
+            // SAFETY: outer `unsafe fn` — `this` is the Box-allocated job; `T::finish` consumes it.
             return unsafe { T::finish(this) };
         }
         Err(e) => {
             #[cfg(windows)]
             spawn_options.stderr.deinit();
             s.set_err(format_args!("Failed to spawn process: {}", e.name()));
+            // SAFETY: outer `unsafe fn` — `this` is the Box-allocated job; `T::finish` consumes it.
             return unsafe { T::finish(this) };
         }
     };
@@ -2199,6 +2215,7 @@ unsafe fn spawn_cmd_generic<T: SpawnCmdTarget>(
                 }
                 if s.stdout_reader().start(stdout, true).is_err() {
                     s.set_err(format_args!("Failed to start reading stdout"));
+                    // SAFETY: outer `unsafe fn` — `this` is the Box-allocated job; `T::finish` consumes it.
                     return unsafe { T::finish(this) };
                 }
                 if let Some(p) = s.stdout_reader().handle.get_poll() {
@@ -2229,6 +2246,7 @@ unsafe fn spawn_cmd_generic<T: SpawnCmdTarget>(
             *s.remaining_fds() += 1;
             if s.stderr_reader().start_with_current_pipe().is_err() {
                 s.set_err(format_args!("Failed to start reading stderr"));
+                // SAFETY: outer `unsafe fn` — `this` is the Box-allocated job; `T::finish` consumes it.
                 return unsafe { T::finish(this) };
             }
         }

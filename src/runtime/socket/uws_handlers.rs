@@ -572,43 +572,53 @@ where
     // on_create has restamped them; if anything fires before that, route to
     // the freshly stashed NewSocket.
     fn on_close_no_ext(s: *mut us_socket_t, code: i32, reason: Option<*mut c_void>) {
-        // SAFETY (applies to every `thunk::socket_ext_owner` in this impl): `s`
-        // is live; the ext slot holds the unique heap `NewSocket` stashed by
-        // `on_create`; dispatch is single-threaded so no aliasing `&mut`. The
-        // `&mut` from `socket_ext_owner` is immediately converted to `*mut` so
-        // no `&mut NewSocket` is held across the re-entrant `on_*` body.
+        // SAFETY: `s` is live; ext holds the unique heap `NewSocket` stashed by `on_create`;
+        // single-threaded dispatch — no aliasing `&mut`. `socket_ext_owner` returns `&mut`
+        // which is immediately coerced to `*mut`; same contract applies to every
+        // `socket_ext_owner` / `NewSocket::on_*` call in this impl block.
         if let Some(ns) = unsafe { thunk::socket_ext_owner::<api::NewSocket<SSL>>(s) } {
             let ns: *mut api::NewSocket<SSL> = ns;
+            // SAFETY: `ns` is the unique heap `NewSocket`; no aliasing `&mut` is held.
             swallow(unsafe { api::NewSocket::on_close(ns, wrap::<SSL>(s), code, reason) });
         }
     }
     fn on_data_no_ext(s: *mut us_socket_t, data: &[u8]) {
+        // SAFETY: see `on_close_no_ext`; `ns` is immediately coerced to `*mut`.
         if let Some(ns) = unsafe { thunk::socket_ext_owner::<api::NewSocket<SSL>>(s) } {
             let ns: *mut api::NewSocket<SSL> = ns;
+            // SAFETY: `ns` is the unique heap `NewSocket`; no aliasing `&mut` is held.
             swallow(unsafe { api::NewSocket::on_data(ns, wrap::<SSL>(s), data) });
         }
     }
     fn on_writable_no_ext(s: *mut us_socket_t) {
+        // SAFETY: see `on_close_no_ext`; `ns` is immediately coerced to `*mut`.
         if let Some(ns) = unsafe { thunk::socket_ext_owner::<api::NewSocket<SSL>>(s) } {
             let ns: *mut api::NewSocket<SSL> = ns;
+            // SAFETY: `ns` is the unique heap `NewSocket`; no aliasing `&mut` is held.
             swallow(unsafe { api::NewSocket::on_writable(ns, wrap::<SSL>(s)) });
         }
     }
     fn on_end_no_ext(s: *mut us_socket_t) {
+        // SAFETY: see `on_close_no_ext`; `ns` is immediately coerced to `*mut`.
         if let Some(ns) = unsafe { thunk::socket_ext_owner::<api::NewSocket<SSL>>(s) } {
             let ns: *mut api::NewSocket<SSL> = ns;
+            // SAFETY: `ns` is the unique heap `NewSocket`; no aliasing `&mut` is held.
             swallow(unsafe { api::NewSocket::on_end(ns, wrap::<SSL>(s)) });
         }
     }
     fn on_timeout_no_ext(s: *mut us_socket_t) {
+        // SAFETY: see `on_close_no_ext`; `ns` is immediately coerced to `*mut`.
         if let Some(ns) = unsafe { thunk::socket_ext_owner::<api::NewSocket<SSL>>(s) } {
             let ns: *mut api::NewSocket<SSL> = ns;
+            // SAFETY: `ns` is the unique heap `NewSocket`; no aliasing `&mut` is held.
             swallow(unsafe { api::NewSocket::on_timeout(ns, wrap::<SSL>(s)) });
         }
     }
     fn on_handshake_no_ext(s: *mut us_socket_t, ok: bool, err: us_bun_verify_error_t) {
+        // SAFETY: see `on_close_no_ext`; `ns` is immediately coerced to `*mut`.
         if let Some(ns) = unsafe { thunk::socket_ext_owner::<api::NewSocket<SSL>>(s) } {
             let ns: *mut api::NewSocket<SSL> = ns;
+            // SAFETY: `ns` is the unique heap `NewSocket`; no aliasing `&mut` is held.
             swallow(unsafe { api::NewSocket::on_handshake(ns, wrap::<SSL>(s), ok as i32, err) });
         }
     }

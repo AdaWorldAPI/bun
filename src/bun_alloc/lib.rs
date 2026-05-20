@@ -365,6 +365,9 @@ pub mod default_alloc {
     #[inline]
     pub fn malloc(size: usize) -> *mut c_void {
         if cfg!(bun_asan) {
+            // SAFETY: `libc::malloc` has no memory-safety preconditions; it
+            // returns null on failure. Used only under `bun_asan` where the
+            // global allocator is the system libc allocator.
             unsafe { libc::malloc(size) }
         } else {
             crate::mimalloc::mi_malloc(size)
@@ -374,6 +377,8 @@ pub mod default_alloc {
     #[inline]
     pub fn zalloc(size: usize) -> *mut c_void {
         if cfg!(bun_asan) {
+            // SAFETY: `libc::calloc` has no memory-safety preconditions;
+            // returns null on failure. Used only under `bun_asan`.
             unsafe { libc::calloc(1, size) }
         } else {
             crate::mimalloc::mi_zalloc(size)
@@ -383,6 +388,8 @@ pub mod default_alloc {
     #[inline]
     pub fn calloc(count: usize, size: usize) -> *mut c_void {
         if cfg!(bun_asan) {
+            // SAFETY: `libc::calloc` has no memory-safety preconditions;
+            // returns null on failure. Used only under `bun_asan`.
             unsafe { libc::calloc(count, size) }
         } else {
             crate::mimalloc::mi_calloc(count, size)
@@ -394,8 +401,10 @@ pub mod default_alloc {
     #[inline]
     pub unsafe fn realloc(ptr: *mut c_void, new_size: usize) -> *mut c_void {
         if cfg!(bun_asan) {
+            // SAFETY: caller guarantees `ptr` is null or a live libc allocation.
             unsafe { libc::realloc(ptr, new_size) }
         } else {
+            // SAFETY: caller guarantees `ptr` is null or a live mimalloc allocation.
             unsafe { crate::mimalloc::mi_realloc(ptr, new_size) }
         }
     }
@@ -405,8 +414,10 @@ pub mod default_alloc {
     #[inline]
     pub unsafe fn free(ptr: *mut c_void) {
         if cfg!(bun_asan) {
+            // SAFETY: caller guarantees `ptr` is null or a live libc allocation.
             unsafe { libc::free(ptr) }
         } else {
+            // SAFETY: caller guarantees `ptr` is null or a live mimalloc allocation.
             unsafe { crate::mimalloc::mi_free(ptr) }
         }
     }
@@ -423,6 +434,8 @@ pub mod default_alloc {
         // OS (`malloc_usable_size` on Linux, `malloc_size` on macOS). `bun_asan`
         // is only ever set on Linux or macOS, so the catch-all (non-asan, every
         // `check-all` target including Windows) stays on mimalloc.
+        // SAFETY: caller guarantees `ptr` is a live allocation from the matching
+        // allocator; null was already returned early above.
         #[cfg(all(bun_asan, target_os = "linux"))]
         return unsafe { libc::malloc_usable_size(ptr.cast_mut()) };
         #[cfg(all(bun_asan, target_os = "macos"))]
@@ -3380,11 +3393,13 @@ impl<
                 if !index.is_overflow() {
                     let i = index.index() as usize;
                     debug_assert!(i < COUNT);
-                    // SAFETY: a non-sentinel non-overflow index was assigned by
-                    // `put` (which bumps `backing_buf_used`) and its key stored
-                    // by `put_key` at this slot before any reader could observe
-                    // the index — the slot is initialized. `key_list_slices` is
-                    // a process-lifetime mapping of `COUNT` slots.
+                    // Non-sentinel non-overflow index: assigned by `put` (bumps
+                    // `backing_buf_used`) and its key stored by `put_key` at
+                    // this slot before any reader sees the index — initialized.
+                    // `key_list_slices` is a process-lifetime mapping of `COUNT`
+                    // slots; `i < COUNT` is asserted above.
+                    // SAFETY: `i < COUNT` (debug-asserted); slot is initialized;
+                    // `key_list_slices` owns `COUNT` valid `&'static [u8]` entries.
                     Some(unsafe { *self.key_list_slices.cast::<&'static [u8]>().as_ptr().add(i) })
                 } else {
                     // TODO(port): see key_list_overflow note — Zig indexes `.items` here.
