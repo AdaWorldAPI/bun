@@ -192,6 +192,8 @@ pub unsafe fn runtime_state_of(vm: *mut VirtualMachine) -> *mut RuntimeState {
     // one accessor that may run off the VM's JS thread, which could be inside
     // a `&mut self.transpiler` borrow there; a shared `&*vm` here would alias
     // it (SB/TB-UB).
+    // SAFETY: caller guarantees `vm` points at a live `VirtualMachine` whose
+    // `runtime_state` was set by `init_runtime_state`; no `&VirtualMachine` formed.
     unsafe { (*vm).runtime_state.cast::<RuntimeState>() }
 }
 
@@ -697,6 +699,8 @@ unsafe fn load_preloads(
                         format_args!(
                             "{} resolving preload {}",
                             e.name(),
+                            // SAFETY: `preload` is a stable `*const [u8]` pointing
+                            // at the live boxed slice for this loop iteration.
                             bun_core::fmt::format_json_string_latin1(unsafe { &*preload }),
                         ),
                     );
@@ -714,6 +718,8 @@ unsafe fn load_preloads(
                         bun_ast::Loc::EMPTY,
                         format_args!(
                             "preload not found {}",
+                            // SAFETY: `preload` is a stable `*const [u8]` pointing
+                            // at the live boxed slice for this loop iteration.
                             bun_core::fmt::format_json_string_latin1(unsafe { &*preload }),
                         ),
                     );
@@ -809,6 +815,7 @@ unsafe fn load_preloads(
         // PORT NOTE: Zig sets `this.preload.len = 0` (truncate without freeing
         // the backing allocation). `Vec::clear` matches — drops the `Box<[u8]>`
         // payloads but keeps capacity.
+        // SAFETY: `vm` is the live per-thread VM (fn contract).
         unsafe { (*vm).preload.clear() };
     }
 
@@ -2501,6 +2508,8 @@ fn transpile_source_code_inner(
                 // `parse_maybe_return_file_only_allow_shared_buffer` body, so
                 // dispatch at runtime via the const-generic bool.
                 let return_file_only = disable_transpilying || loader == L::Json;
+                // SAFETY: `jsc_vm` is the live per-thread VM; `parse_options`
+                // borrows data valid for this call.
                 let parse_result: Option<ParseResult> = if return_file_only {
                     unsafe {
                         (*jsc_vm)
@@ -2508,6 +2517,7 @@ fn transpile_source_code_inner(
                             .parse_maybe_return_file_only::<true>(parse_options, None)
                     }
                 } else {
+                    // SAFETY: same as above — `jsc_vm` is the live per-thread VM.
                     unsafe {
                         (*jsc_vm)
                             .transpiler
@@ -2518,11 +2528,13 @@ fn transpile_source_code_inner(
                 let Some(mut parse_result) = parse_result else {
                     // Spec :273-295 — register with watcher even on parse failure.
                     if !disable_transpilying {
-                        // SAFETY: see PORT NOTE on `_fd_guard` — reborrow via
-                        // the raw pointers so the guard stays valid.
                         maybe_watch_file(
                             jsc_vm,
+                            // SAFETY: `should_close_ptr` points at a stack local
+                            // declared in this frame; the guard uses the same ptr.
                             unsafe { &mut *should_close_ptr },
+                            // SAFETY: `input_file_fd_ptr` points at a stack local
+                            // declared in this frame; copy the `Fd` by value.
                             unsafe { *input_file_fd_ptr },
                             is_node_override,
                             path,
@@ -2538,6 +2550,8 @@ fn transpile_source_code_inner(
                 // Spec :301-317 — `.wasm` discovered post-parse: recurse with
                 // the parsed source as virtual.
                 if parse_result.loader == L::Wasm {
+                    // SAFETY: `extra` is a live `TranspileExtra` (fn contract);
+                    // patching `loader` and `module_type` before the recursive call.
                     unsafe {
                         (*extra).loader = L::Wasm;
                         (*extra).module_type = ModuleType::Unknown;
@@ -2565,11 +2579,13 @@ fn transpile_source_code_inner(
 
                 // Spec :319-336 — register with watcher on success too.
                 if !disable_transpilying {
-                    // SAFETY: see PORT NOTE on `_fd_guard` — reborrow via the
-                    // raw pointers so the guard stays valid.
                     maybe_watch_file(
                         jsc_vm,
+                        // SAFETY: `should_close_ptr` points at a stack local
+                        // in this frame; the `_fd_guard` holds the same ptr.
                         unsafe { &mut *should_close_ptr },
+                        // SAFETY: `input_file_fd_ptr` points at a stack local
+                        // in this frame; copy the `Fd` by value.
                         unsafe { *input_file_fd_ptr },
                         is_node_override,
                         path,
@@ -2580,6 +2596,8 @@ fn transpile_source_code_inner(
                 }
 
                 // Spec :338-341.
+                // SAFETY: `jsc_vm` is the live per-thread VM; `transpiler.log`
+                // is a non-null `*mut Log` valid for the duration of this call.
                 if unsafe { (*(*jsc_vm).transpiler.log).errors > 0 } {
                     arena_guard.2 = false;
                     return Err(bun_core::err!("ParseError"));
@@ -2737,6 +2755,8 @@ fn transpile_source_code_inner(
                         unsafe { bun_core::heap::take(entry_ptr.cast::<CacheEntry>()) };
                     // Spec :418-421 — register the cached sourcemap so error
                     // stacks remap to original positions even on a cache hit.
+                    // SAFETY: `jsc_vm` is the live per-thread VM; `source_mappings`
+                    // is only accessed on the JS thread.
                     let _ = unsafe { &mut (*jsc_vm).source_mappings }.put_mappings(
                         source,
                         bun_core::MutableString {
@@ -2816,6 +2836,7 @@ fn transpile_source_code_inner(
                 }
 
                 // Spec :468-479 — link import records.
+                // SAFETY: `jsc_vm` is the live per-thread VM (fn contract).
                 let start_count = unsafe { &*jsc_vm }.transpiler.linker.import_counter;
                 // PORT NOTE: Zig `link(path, &result, origin, .absolute_path,
                 // comptime ignore_runtime=false, comptime is_bun=true)` — the
@@ -2823,6 +2844,8 @@ fn transpile_source_code_inner(
                 // `Linker::link`; `import_path_format` stayed runtime
                 // (see `linker.rs` PORT NOTE: `ImportPathFormat` is not
                 // `ConstParamTy`).
+                // SAFETY: `jsc_vm` is the live per-thread VM (fn contract);
+                // `parse_result` and `path` are live for this call.
                 unsafe {
                     (*jsc_vm).transpiler.linker.link::<false, true>(
                         path,
@@ -2834,6 +2857,7 @@ fn transpile_source_code_inner(
 
                 // Spec :481-510 — pending imports → AsyncModule queue.
                 if parse_result.pending_imports.len() > 0 {
+                    // SAFETY: `extra` is a live `TranspileExtra` (fn contract).
                     let promise_ptr = unsafe { &*extra }.promise_ptr;
                     if promise_ptr.is_null() {
                         return Err(bun_core::err!("UnexpectedPendingResolution"));
@@ -2879,11 +2903,13 @@ fn transpile_source_code_inner(
                 }
 
                 if !macro_mode {
+                    // SAFETY: `jsc_vm` is the live per-thread VM; plain field update.
                     unsafe {
                         (*jsc_vm).resolved_count +=
                             (*jsc_vm).transpiler.linker.import_counter - start_count;
                     }
                 }
+                // SAFETY: `jsc_vm` is the live per-thread VM; plain field reset.
                 unsafe { (*jsc_vm).transpiler.linker.import_counter = 0 };
 
                 // Spec :516-523.
@@ -2893,7 +2919,7 @@ fn transpile_source_code_inner(
 
                 // ── js_printer::print ───────────────────────────────────────
                 // Spec :525-539.
-                // SAFETY: `extra.source_code_printer` is non-null per `TranspileExtra`
+                // `extra.source_code_printer` is non-null per `TranspileExtra`
                 // contract.
                 // PORT NOTE: do NOT bind a long-lived `&mut BufferPrinter`
                 // here — the `source_map_handler` / `print_with_source_map`
@@ -2901,6 +2927,8 @@ fn transpile_source_code_inner(
                 // from the raw pointer, which would invalidate any earlier
                 // Unique tag under Stacked Borrows. Rederive at each use-site
                 // instead (reset, mapper, print, get_written).
+                // SAFETY: `(*extra).source_code_printer` is non-null per
+                // `TranspileExtra` contract; rederived here (not a stale tag).
                 unsafe { (*(*extra).source_code_printer).ctx.reset() };
                 // Spec :529-538 — `var mapper = jsc_vm.sourceMapHandler(&printer);
                 // … jsc_vm.transpiler.printWithSourceMap(parse_result, &printer,
@@ -2926,12 +2954,17 @@ fn transpile_source_code_inner(
                 // this block returns, the `printer` binding is rederived from
                 // the raw pointer below — any earlier Unique tag is dead.
                 {
-                    // SAFETY: `jsc_vm` / `(*extra).source_code_printer` are live
+                    // `jsc_vm` / `(*extra).source_code_printer` are live
                     // for the call (fn contract); `mapper` does not escape this
                     // scope, so the unbounded `'a` from the raw-deref reborrow
                     // is bounded by the block.
+                    // SAFETY: `jsc_vm` and `(*extra).source_code_printer` are
+                    // live for this call; `mapper` is scoped to this block.
                     let mut mapper =
                         unsafe { (*jsc_vm).source_map_handler((*extra).source_code_printer) };
+                    // SAFETY: `jsc_vm` and `(*extra).source_code_printer` are
+                    // valid for this call per fn contract; `parse_result` was
+                    // produced in the same arena.
                     unsafe {
                         (*jsc_vm).transpiler.print_with_source_map(
                             // Same per-call arena that `parse_options.arena`
@@ -2952,6 +2985,7 @@ fn transpile_source_code_inner(
                 }
 
                 if is_main {
+                    // SAFETY: `jsc_vm` is the live per-thread VM; plain field write.
                     unsafe { (*jsc_vm).has_loaded = true };
                 }
 
@@ -2961,12 +2995,14 @@ fn transpile_source_code_inner(
                 // `is_commonjs_module`/`module_info` patched on). Gated so the
                 // fall-through to the non-watcher tail below is an explicit,
                 // intentional degradation rather than a silent live divergence.
+                // SAFETY: `jsc_vm` is the live per-thread VM (fn contract).
                 if unsafe { &*jsc_vm }.is_watcher_enabled() {
                     // SAFETY: `extra.source_code_printer` is non-null per
                     // `TranspileExtra` contract; rederive after the print block
                     // (Stacked Borrows — see the matching note below).
                     let printer: &mut bun_js_printer::BufferPrinter =
                         unsafe { &mut *(*extra).source_code_printer };
+                    // SAFETY: `jsc_vm` is the live per-thread VM (fn contract).
                     let mut resolved_source = unsafe {
                         (*jsc_vm).ref_counted_resolved_source::<false>(
                             printer.ctx.get_written(),
@@ -3030,13 +3066,15 @@ fn transpile_source_code_inner(
                     _ => ResolvedSourceTag::Javascript,
                 };
 
-                // SAFETY: `extra.source_code_printer` is non-null per
+                // `extra.source_code_printer` is non-null per
                 // `TranspileExtra` contract. Rederive from the raw pointer
                 // AFTER the print block — both the `writer: &mut BufferPrinter`
                 // passed into `print_with_source_map` and the
                 // `on_source_map_chunk` reborrow inside it invalidated any
                 // earlier Unique tag under Stacked Borrows, so reading through
                 // a pre-print binding here would be UB.
+                // SAFETY: `(*extra).source_code_printer` is non-null per
+                // `TranspileExtra` contract; rederived after the print block.
                 let printer: &mut bun_js_printer::BufferPrinter =
                     unsafe { &mut *(*extra).source_code_printer };
                 let written = printer.ctx.get_written();
@@ -3118,13 +3156,13 @@ fn transpile_source_code_inner(
         // .sqlite / .sqlite_embedded — Spec :678-718.
         // ────────────────────────────────────────────────────────────────────
         L::Sqlite | L::SqliteEmbedded => {
-            // SAFETY: per fn contract.
             // Spec :680 — `jsc_vm.hot_reload == .hot`. `HotReload` is
             // `{ none=0, hot=1, watch=2 }` (src/options_types/Context.zig:118);
             // `!= 0` would also match `.watch`, which is wrong.
             // TODO(b2-cycle): `hot_reload` is `cli::Command::HotReload` enum
             // (gated as `u8`); compare to the `.hot` discriminant explicitly.
             const HOT_RELOAD_HOT: u8 = 1;
+            // SAFETY: `jsc_vm` is the live per-thread VM (fn contract).
             let hot = unsafe { &*jsc_vm }.hot_reload == HOT_RELOAD_HOT;
             let sqlite_module_source_code_string: &'static [u8] = if hot {
                 SQLITE_MODULE_SOURCE_HOT
@@ -3263,6 +3301,8 @@ fn transpile_source_code_inner(
                 // `&mut *jsc_vm` aliases through the call below, so there is no
                 // need to copy the ~12 borrowed slices out (perf: was a
                 // per-asset-import `url::URL::clone`).
+                // SAFETY: `jsc_vm` is the live per-thread VM; read-only borrow
+                // of the `origin` field with no aliasing `&mut` active.
                 let origin = unsafe { &(*jsc_vm).origin };
                 // PORT NOTE: `jsc.API.Bun.getPublicPath` is gated behind a
                 // private `_jsc_gated` mod in BunObject.rs; it is a thin
@@ -3545,10 +3585,12 @@ unsafe fn fetch_builtin_module(
         let graph = bun_standalone_graph::Graph::get()
             .expect("vm.standalone_module_graph set ⇔ Graph singleton populated");
         // Spec uses `graph.files.getPtr(spec)` (no virtual-root prefix
-        // check). SAFETY: `graph` is the `UnsafeCell::get()` pointer to the
+        // check). `graph` is the `UnsafeCell::get()` pointer to the
         // process-lifetime singleton; this hook runs on the JS thread and
         // the only mutation below (`to_wtf_string`) is the per-`File`
         // idempotent `wtf_string` cache.
+        // SAFETY: `graph` is the process-lifetime singleton obtained via
+        // `UnsafeCell::get()`; single-threaded JS access, no aliasing.
         if let Some(file) = unsafe { (*graph).files.get_mut(spec) } {
             use bun_standalone_graph::StandaloneModuleGraph::ModuleFormat;
 
@@ -3814,6 +3856,8 @@ unsafe fn get_loader_and_virtual_source<'a>(
                         // PORT NOTE: borrowck — `Fs::Path<'a>` borrows
                         // `filename`, which borrows `*blob_to_deinit`. The
                         // caller owns that slot for `'a`, so erase via raw ptr.
+                        // SAFETY: `filename` is a valid UTF-8/bytes slice
+                        // owned by `blob_to_deinit` which outlives this call.
                         path = Fs::Path::init(unsafe {
                             core::slice::from_raw_parts(filename.as_ptr(), filename.len())
                         });
@@ -3828,6 +3872,8 @@ unsafe fn get_loader_and_virtual_source<'a>(
                     // logger/lib.rs §`type Str`), so erase to
                     // `'static`; sound because the blob outlives the
                     // synchronous `transpile_source_code_inner` call.
+                    // SAFETY: `blob` and `path` outlive this synchronous call;
+                    // erasing their slice lifetimes to `'static` is sound here.
                     let (contents, path_text): (&'static [u8], &'static [u8]) = unsafe {
                         let v = blob.shared_view();
                         (
@@ -4203,6 +4249,7 @@ unsafe fn transpile_file(
                     CustomLoader, find_longest_registered_extension,
                 };
                 // Spec :1043-1064.
+                // SAFETY: `jsc_vm` is the live per-thread VM (fn contract).
                 if unsafe { &*jsc_vm }.commonjs_custom_extensions.len() > 0
                     && unsafe { &*jsc_vm }.has_mutated_built_in_extensions == 0
                 {
@@ -4882,6 +4929,9 @@ unsafe fn _resolve<'a>(
     // §allocators) — the same store `load_preloads` reads from. Transmute the
     // lifetime to `'a` so the caller can `cloneUTF8` it; the underlying bytes
     // outlive the program.
+    // SAFETY: `result_path.text` points into the resolver's `'static`
+    // BSSStringList; erasing its lifetime to `'a` is sound because the
+    // underlying bytes outlive the program.
     *ret_path = unsafe { bun_ptr::detach_lifetime(result_path.text) };
     Ok(())
 }
@@ -5009,6 +5059,7 @@ unsafe fn resolve_hook(
     let mut log = bun_ast::Log::init();
     // `vm.log` is set unconditionally in `init` and never cleared (Zig stores
     // `*logger.Log`, always non-null) — the `expect` is infallible.
+    // SAFETY: `vm` is the live per-thread VM; read-only field access.
     let old_log: core::ptr::NonNull<bun_ast::Log> =
         unsafe { &*vm }.log.expect("vm.log set in init");
     let log_nn: core::ptr::NonNull<bun_ast::Log> = core::ptr::NonNull::from(&mut log);
@@ -5027,6 +5078,8 @@ unsafe fn resolve_hook(
         // stack pointer. The PM may have been lazily created inside
         // `_resolve` with `pm.log = resolver.log` (our stack `log`), so
         // restore it even if it was `None` at swap time.
+        // SAFETY: `vm` is valid for the duration of this deferred block;
+        // the guard fires on the same JS thread before `vm` is destroyed.
         unsafe {
             (*vm).log = Some(old_log);
             (*vm).transpiler.resolver.log = old_log;

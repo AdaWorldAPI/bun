@@ -1810,10 +1810,12 @@ mod posix_impl {
     unsafe fn sys_openat(d: i32, p: *const libc::c_char, f: i32, m: libc::c_uint) -> i32 {
         #[cfg(target_os = "macos")]
         {
+            // SAFETY: outer `unsafe fn` propagates the syscall's safety contract; thin forward.
             unsafe { super::nocancel::openat(d, p, f, m) }
         }
         #[cfg(not(target_os = "macos"))]
         {
+            // SAFETY: outer `unsafe fn` propagates the syscall's safety contract; thin forward.
             unsafe { libc::openat(d, p, f, m) }
         }
     }
@@ -1822,10 +1824,12 @@ mod posix_impl {
     unsafe fn sys_read(fd: i32, buf: *mut libc::c_void, n: usize) -> isize {
         #[cfg(target_os = "macos")]
         {
+            // SAFETY: outer `unsafe fn` propagates the syscall's safety contract; thin forward.
             unsafe { super::nocancel::read(fd, buf, n) }
         }
         #[cfg(not(target_os = "macos"))]
         {
+            // SAFETY: outer `unsafe fn` propagates the syscall's safety contract; thin forward.
             unsafe { libc::read(fd, buf, n) }
         }
     }
@@ -1984,6 +1988,8 @@ mod posix_impl {
         #[cfg(target_os = "macos")]
         {
             let rc = check_once_p!(
+                // SAFETY: `path` is a valid NUL-terminated C string; `dir` is a valid directory
+                // fd; `flags`/`mode` are caller-supplied.
                 unsafe { sys_openat(dir.native(), path.as_ptr(), flags, mode as libc::c_uint) },
                 Tag::open,
                 path
@@ -1998,6 +2004,8 @@ mod posix_impl {
         #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
         {
             let rc = check_p!(
+                // SAFETY: `path` is a valid NUL-terminated C string; `dir` is a valid directory
+                // fd; `flags`/`mode` are caller-supplied.
                 unsafe { sys_openat(dir.native(), path.as_ptr(), flags, mode as libc::c_uint) },
                 Tag::open,
                 path
@@ -2036,6 +2044,7 @@ mod posix_impl {
         #[cfg(target_os = "macos")]
         {
             let n = check_once!(
+                // SAFETY: `buf` is valid for `len` bytes of writes; `fd` is a valid open descriptor.
                 unsafe { sys_read(fd.native(), buf.as_mut_ptr().cast(), len) },
                 Tag::read
             );
@@ -2049,6 +2058,7 @@ mod posix_impl {
         #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
         {
             let n = check!(
+                // SAFETY: `buf` is valid for `len` bytes of writes; `fd` is a valid open descriptor.
                 unsafe { sys_read(fd.native(), buf.as_mut_ptr().cast(), len) },
                 Tag::read
             );
@@ -2061,6 +2071,7 @@ mod posix_impl {
         #[cfg(target_os = "macos")]
         {
             let n = check_once!(
+                // SAFETY: `buf` is valid for `len` bytes of reads; `fd` is a valid open descriptor.
                 unsafe { sys_write(fd.native(), buf.as_ptr().cast(), len) },
                 Tag::write
             );
@@ -2074,6 +2085,7 @@ mod posix_impl {
         #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
         {
             let n = check!(
+                // SAFETY: `buf` is valid for `len` bytes of reads; `fd` is a valid open descriptor.
                 unsafe { sys_write(fd.native(), buf.as_ptr().cast(), len) },
                 Tag::write
             );
@@ -2090,6 +2102,7 @@ mod posix_impl {
         #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
             let n = check!(
+                // SAFETY: `buf` is valid for `len` bytes of writes; `fd` is a valid open descriptor.
                 unsafe { sys_pread(fd.native(), buf.as_mut_ptr().cast(), len, off) },
                 Tag::pread
             );
@@ -2106,6 +2119,7 @@ mod posix_impl {
         #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
             let n = check!(
+                // SAFETY: `buf` is valid for `len` bytes of reads; `fd` is a valid open descriptor.
                 unsafe { sys_pwrite(fd.native(), buf.as_ptr().cast(), len, off) },
                 Tag::pwrite
             );
@@ -2122,10 +2136,14 @@ mod posix_impl {
         {
             let mut st = core::mem::MaybeUninit::<Stat>::uninit();
             check_p!(
+                // SAFETY: `path` is a valid NUL-terminated C string; `st` is uninitialized storage
+                // for `Stat`; the kernel fills it on success.
                 unsafe { libc::stat(path.as_ptr(), st.as_mut_ptr()) },
                 Tag::stat,
                 path
             );
+            // SAFETY: `check_p!` returns early on error so the syscall succeeded and `st` is
+            // fully initialized by the kernel.
             Ok(unsafe { st.assume_init() })
         }
     }
@@ -2139,9 +2157,13 @@ mod posix_impl {
         {
             let mut st = core::mem::MaybeUninit::<Stat>::uninit();
             check!(
+                // SAFETY: `fd` is a valid open descriptor; `st` is uninitialized storage for
+                // `Stat`; the kernel fills it on success.
                 unsafe { libc::fstat(fd.native(), st.as_mut_ptr()) },
                 Tag::fstat
             );
+            // SAFETY: `check!` returns early on error so the syscall succeeded and `st` is fully
+            // initialized by the kernel.
             Ok(unsafe { st.assume_init() })
         }
     }
@@ -2155,10 +2177,14 @@ mod posix_impl {
         {
             let mut st = core::mem::MaybeUninit::<Stat>::uninit();
             check_p!(
+                // SAFETY: `path` is a valid NUL-terminated C string; `st` is uninitialized storage
+                // for `Stat`; the kernel fills it on success.
                 unsafe { libc::lstat(path.as_ptr(), st.as_mut_ptr()) },
                 Tag::lstat,
                 path
             );
+            // SAFETY: `check_p!` returns early on error so the syscall succeeded and `st` is
+            // fully initialized by the kernel.
             Ok(unsafe { st.assume_init() })
         }
     }
@@ -2422,6 +2448,7 @@ mod posix_impl {
 
     pub fn mkdir(path: &ZStr, mode: Mode) -> Maybe<()> {
         check_p!(
+            // SAFETY: `path` is a valid NUL-terminated C string; `mode` is a valid permission bitmask.
             unsafe { libc::mkdir(path.as_ptr(), mode as libc::mode_t) },
             Tag::mkdir,
             path
@@ -2432,6 +2459,8 @@ mod posix_impl {
         let dir = dir.as_fd();
         // sys.zig:809 — `mkdiratZ` tags errors as `.mkdir` (not `.mkdirat`).
         check_p!(
+            // SAFETY: `path` is a valid NUL-terminated C string; `dir` is a valid directory fd;
+            // `mode` is a valid permission bitmask.
             unsafe { libc::mkdirat(dir.native(), path.as_ptr(), mode as libc::mode_t) },
             Tag::mkdir,
             path
@@ -2470,11 +2499,13 @@ mod posix_impl {
         })
     }
     pub fn unlink(path: &ZStr) -> Maybe<()> {
+        // SAFETY: `path` is a valid NUL-terminated C string.
         check_p!(unsafe { libc::unlink(path.as_ptr()) }, Tag::unlink, path);
         Ok(())
     }
     pub fn rename(from: &ZStr, to: &ZStr) -> Maybe<()> {
         check_p!(
+            // SAFETY: `from` and `to` are valid NUL-terminated C strings.
             unsafe { libc::rename(from.as_ptr(), to.as_ptr()) },
             Tag::rename,
             from
@@ -2485,6 +2516,8 @@ mod posix_impl {
         let from_dir = from_dir.as_fd();
         let to_dir = to_dir.as_fd();
         check_p!(
+            // SAFETY: `from`/`to` are valid NUL-terminated C strings; `from_dir`/`to_dir` are
+            // valid directory fds.
             unsafe {
                 libc::renameat(
                     from_dir.native(),
@@ -2569,6 +2602,8 @@ mod posix_impl {
     /// surfaced `SystemError` carries BOTH the dirfd and the path.
     pub fn unlinkat_with_flags(dir: Fd, path: &ZStr, flags: i32) -> Maybe<()> {
         check_fp!(
+            // SAFETY: `path` is a valid NUL-terminated C string; `dir` is a valid directory fd;
+            // `flags` is a caller-supplied bitmask (e.g. AT_REMOVEDIR).
             unsafe { libc::unlinkat(dir.native(), path.as_ptr(), flags) },
             Tag::unlink,
             dir,
@@ -2585,6 +2620,7 @@ mod posix_impl {
     }
     pub fn symlink(target: &ZStr, link: &ZStr) -> Maybe<()> {
         check_p!(
+            // SAFETY: `target` and `link` are valid NUL-terminated C strings.
             unsafe { libc::symlink(target.as_ptr(), link.as_ptr()) },
             Tag::symlink,
             link
@@ -2593,6 +2629,7 @@ mod posix_impl {
     }
     pub fn readlink(path: &ZStr, buf: &mut [u8]) -> Maybe<usize> {
         let n = check_p!(
+            // SAFETY: `path` is a valid NUL-terminated C string; `buf` is a valid mutable buffer.
             unsafe { libc::readlink(path.as_ptr(), buf.as_mut_ptr().cast(), buf.len()) },
             Tag::readlink,
             path
@@ -2612,6 +2649,8 @@ mod posix_impl {
     pub fn dup(fd: Fd) -> Maybe<Fd> {
         // sys.zig:959 `errnoSysFd(.., .fcntl, fd)` — attach the fd on error.
         loop {
+            // SAFETY: `fd` is a valid open file descriptor; `F_DUPFD_CLOEXEC` with arg 0 always
+            // succeeds as long as a free fd slot exists, returning the new descriptor.
             let rc = unsafe { libc::fcntl(fd.native(), libc::F_DUPFD_CLOEXEC, 0) };
             if rc < 0 {
                 let e = last_errno();
@@ -2639,16 +2678,19 @@ mod posix_impl {
         Ok(())
     }
     pub fn getcwd(buf: &mut [u8]) -> Maybe<usize> {
+        // SAFETY: `buf` is a valid mutable buffer of `buf.len()` bytes for the output path.
         let p = unsafe { libc::getcwd(buf.as_mut_ptr().cast(), buf.len()) };
         if p.is_null() {
             return Err(err_with(Tag::getcwd));
         }
+        // SAFETY: `p` was returned by `getcwd` and points to a NUL-terminated string inside `buf`.
         Ok(unsafe { libc::strlen(p) })
     }
 
     // ── link/perm/time/access group (sys.zig:406-3973 posix arms) ──
     pub fn link(src: &ZStr, dest: &ZStr) -> Maybe<()> {
         check_p!(
+            // SAFETY: `src` and `dest` are valid NUL-terminated C strings.
             unsafe { libc::link(src.as_ptr(), dest.as_ptr()) },
             Tag::link,
             src
@@ -2660,6 +2702,8 @@ mod posix_impl {
         let dest_dir = dest_dir.as_fd();
         // sys.zig:3963 — `linkatZ` tags as `.link`.
         check_p!(
+            // SAFETY: `src`/`dest` are valid NUL-terminated C strings; `src_dir`/`dest_dir` are
+            // valid directory fds; flags = 0.
             unsafe {
                 libc::linkat(
                     src_dir.native(),
@@ -2743,6 +2787,8 @@ mod posix_impl {
     pub fn symlinkat(target: &ZStr, dirfd: impl AsFd, dest: &ZStr) -> Maybe<()> {
         let dirfd = dirfd.as_fd();
         check_p!(
+            // SAFETY: `target` and `dest` are valid NUL-terminated C strings; `dirfd` is a valid
+            // directory fd.
             unsafe { libc::symlinkat(target.as_ptr(), dirfd.native(), dest.as_ptr()) },
             Tag::symlinkat,
             dest
@@ -2753,6 +2799,8 @@ mod posix_impl {
         let fd = fd.as_fd();
         // sys.zig:2390 — tags as `.readlink`.
         let n = check_p!(
+            // SAFETY: `path` is a valid NUL-terminated C string; `buf` is a valid mutable slice
+            // for the output; `fd` is a valid open directory descriptor.
             unsafe {
                 libc::readlinkat(
                     fd.native(),
@@ -2775,6 +2823,7 @@ mod posix_impl {
     }
     pub fn chmod(path: &ZStr, mode: Mode) -> Maybe<()> {
         check_p!(
+            // SAFETY: `path` is a valid NUL-terminated C string; `mode` is a valid permission bitmask.
             unsafe { libc::chmod(path.as_ptr(), mode as libc::mode_t) },
             Tag::chmod,
             path
@@ -2784,6 +2833,8 @@ mod posix_impl {
     pub fn fchmodat(dir: impl AsFd, path: &ZStr, mode: Mode, flags: i32) -> Maybe<()> {
         let dir = dir.as_fd();
         check_p!(
+            // SAFETY: `path` is a valid NUL-terminated C string; `dir` is a valid directory fd;
+            // `mode` is a valid permission bitmask; `flags` is a caller-supplied bitmask.
             unsafe { libc::fchmodat(dir.native(), path.as_ptr(), mode as libc::mode_t, flags) },
             Tag::fchmodat,
             path
@@ -2801,6 +2852,8 @@ mod posix_impl {
                 fn lchmod(path: *const libc::c_char, mode: libc::mode_t) -> libc::c_int;
             }
             check_p!(
+                // SAFETY: `path` is a valid NUL-terminated C string; `mode` is a valid permission
+                // bitmask; `lchmod` only modifies a symlink's permissions, not the target.
                 unsafe { lchmod(path.as_ptr(), mode as libc::mode_t) },
                 Tag::lchmod,
                 path
@@ -2814,6 +2867,7 @@ mod posix_impl {
     }
     pub fn chown(path: &ZStr, uid: u32, gid: u32) -> Maybe<()> {
         check_p!(
+            // SAFETY: `path` is a valid NUL-terminated C string; `uid`/`gid` are caller-supplied.
             unsafe { libc::chown(path.as_ptr(), uid, gid) },
             Tag::chown,
             path
@@ -2822,6 +2876,7 @@ mod posix_impl {
     }
     pub fn lchown(path: &ZStr, uid: u32, gid: u32) -> Maybe<()> {
         check_p!(
+            // SAFETY: `path` is a valid NUL-terminated C string; acts on the symlink itself.
             unsafe { libc::lchown(path.as_ptr(), uid, gid) },
             Tag::lchown,
             path
@@ -2831,6 +2886,8 @@ mod posix_impl {
     pub fn fchownat(dir: impl AsFd, path: &ZStr, uid: u32, gid: u32, flags: i32) -> Maybe<()> {
         let dir = dir.as_fd();
         check_p!(
+            // SAFETY: `path` is a valid NUL-terminated C string; `dir` is a valid directory fd
+            // or AT_FDCWD; `uid`/`gid`/`flags` are caller-supplied.
             unsafe { libc::fchownat(dir.native(), path.as_ptr(), uid, gid, flags) },
             Tag::fchownat,
             path
@@ -2854,15 +2911,21 @@ mod posix_impl {
         {
             let mut st = core::mem::MaybeUninit::<Stat>::uninit();
             check_p!(
+                // SAFETY: `path` is a valid NUL-terminated C string; `st` is uninitialized storage
+                // for `Stat`; the kernel will fill it on success.
                 unsafe { libc::fstatat(dirfd, path.as_ptr(), st.as_mut_ptr(), 0) },
                 Tag::fstatat,
                 path
             );
+            // SAFETY: `check_p!` returns early on error so reaching here means the syscall
+            // succeeded and the kernel wrote all fields of `st`.
             Ok(unsafe { st.assume_init() })
         }
     }
     pub fn access(path: &ZStr, mode: i32) -> Maybe<()> {
         check_p!(
+            // SAFETY: `path` is a valid NUL-terminated C string; `mode` is a caller-supplied
+            // access-mode bitmask (R_OK/W_OK/X_OK/F_OK).
             unsafe { libc::access(path.as_ptr(), mode) },
             Tag::access,
             path
@@ -2872,12 +2935,14 @@ mod posix_impl {
     /// sys.zig:3504 — never returns `.err`; any non-zero rc → `Ok(false)`.
     pub fn faccessat(dir: impl AsFd, sub: &ZStr) -> Maybe<bool> {
         let dir = dir.as_fd();
+        // SAFETY: `sub` is a valid NUL-terminated C string; `dir` is a valid open directory fd.
         let rc = unsafe { libc::faccessat(dir.native(), sub.as_ptr(), libc::F_OK, 0) };
         Ok(rc == 0)
     }
     pub fn futimens(fd: Fd, atime: TimeLike, mtime: TimeLike) -> Maybe<()> {
         let ts = [atime.to_timespec(), mtime.to_timespec()];
         check!(
+            // SAFETY: `ts` is a valid 2-element `timespec` array; `fd` is a valid open descriptor.
             unsafe { libc::futimens(fd.native(), ts.as_ptr()) },
             Tag::futimens
         );
@@ -2886,6 +2951,8 @@ mod posix_impl {
     pub fn utimens(path: &ZStr, atime: TimeLike, mtime: TimeLike) -> Maybe<()> {
         let ts = [atime.to_timespec(), mtime.to_timespec()];
         check_p!(
+            // SAFETY: `path` is a valid NUL-terminated C string; `ts` is a valid 2-element
+            // `timespec` array; `AT_FDCWD` is always valid; flags = 0.
             unsafe { libc::utimensat(libc::AT_FDCWD, path.as_ptr(), ts.as_ptr(), 0) },
             Tag::utimensat,
             path
@@ -2895,6 +2962,8 @@ mod posix_impl {
     pub fn lutimens(path: &ZStr, atime: TimeLike, mtime: TimeLike) -> Maybe<()> {
         let ts = [atime.to_timespec(), mtime.to_timespec()];
         check_p!(
+            // SAFETY: `path` is a valid NUL-terminated C string; `ts` is a valid 2-element
+            // `timespec` array; `AT_SYMLINK_NOFOLLOW` makes the call operate on the symlink itself.
             unsafe {
                 libc::utimensat(
                     libc::AT_FDCWD,
@@ -2910,10 +2979,12 @@ mod posix_impl {
     }
     /// sys.zig:1748 — Windows uses `GetFileAttributesW`; posix is plain `access`.
     pub fn exists_z(path: &ZStr) -> bool {
+        // SAFETY: `path` is a valid NUL-terminated C string; `libc::access` with F_OK is safe.
         unsafe { libc::access(path.as_ptr(), libc::F_OK) == 0 }
     }
     pub fn exists_at(dir: impl AsFd, sub: &ZStr) -> bool {
         let dir = dir.as_fd();
+        // SAFETY: `sub` is a valid NUL-terminated C string; `dir` is a valid open directory fd.
         unsafe { libc::faccessat(dir.native(), sub.as_ptr(), libc::F_OK, 0) == 0 }
     }
     /// sys.zig:3767 — calls extern C `is_executable_file` (c-bindings.cpp:72-89).
@@ -2926,6 +2997,7 @@ mod posix_impl {
             // its platform sign.
             fn is_executable_file(path: *const c_char) -> bool;
         }
+        // SAFETY: `path` is a valid NUL-terminated C string; the C binding only reads it.
         unsafe { is_executable_file(path.as_ptr()) }
     }
     /// sys.zig:4152 — `fstat` then `@max(st_size, 0)` (clamp negative).
@@ -2942,10 +3014,14 @@ mod posix_impl {
         }
         #[cfg(not(target_os = "macos"))]
         use libc::realpath as _realpath;
+        // SAFETY: `path` is a valid NUL-terminated C string; `buf.0` is a `PathBuffer`-sized
+        // writable buffer passed as the `resolved` output slot.
         let p = unsafe { _realpath(path.as_ptr(), buf.0.as_mut_ptr().cast()) };
         if p.is_null() {
             return Err(err_with_path(Tag::realpath, path));
         }
+        // SAFETY: `p` was returned by `realpath` and points to the NUL-terminated result
+        // inside `buf`; it is valid until `buf` is dropped or overwritten.
         let len = unsafe { libc::strlen(p) };
         Ok(&buf.0[..len])
     }
@@ -2955,6 +3031,8 @@ mod posix_impl {
     pub fn fcntl(fd: Fd, cmd: i32, arg: isize) -> Maybe<FcntlInt> {
         // sys.zig:959-971 — `errnoSysFd(result, .fcntl, fd)`: attach the fd to the error.
         loop {
+            // SAFETY: `fd` is a valid open file descriptor; `cmd` and `arg` are caller-supplied
+            // and must form a valid `fcntl(2)` combination.
             let rc = unsafe { libc::fcntl(fd.native(), cmd, arg) };
             if rc < 0 {
                 let e = last_errno();
@@ -2996,6 +3074,7 @@ mod posix_impl {
         Ok(rc)
     }
     pub fn chdir(path: &ZStr) -> Maybe<()> {
+        // SAFETY: `path` is a valid NUL-terminated C string for the duration of the call.
         check_p!(unsafe { libc::chdir(path.as_ptr()) }, Tag::chdir, path);
         Ok(())
     }
@@ -3017,11 +3096,13 @@ mod posix_impl {
         // sys.zig:2252-2262 — isMac arm: single `recvfrom$NOCANCEL`, no EINTR retry.
         #[cfg(target_os = "macos")]
         let n = check_once!(
+            // SAFETY: `buf` is valid for `len` bytes of writes; `fd` is a valid socket descriptor.
             unsafe { sys_recv(fd.native(), buf.as_mut_ptr().cast(), len, flags) },
             Tag::recv
         );
         #[cfg(not(target_os = "macos"))]
         let n = check!(
+            // SAFETY: `buf` is valid for `len` bytes of writes; `fd` is a valid socket descriptor.
             unsafe { sys_recv(fd.native(), buf.as_mut_ptr().cast(), len, flags) },
             Tag::recv
         );
@@ -3033,11 +3114,13 @@ mod posix_impl {
         // isMac arm: single `sendto$NOCANCEL`, no EINTR retry.
         #[cfg(target_os = "macos")]
         let n = check_once!(
+            // SAFETY: `buf` is valid for `buf.len()` bytes of reads; `fd` is a valid socket descriptor.
             unsafe { sys_send(fd.native(), buf.as_ptr().cast(), buf.len(), flags) },
             Tag::send
         );
         #[cfg(not(target_os = "macos"))]
         let n = check!(
+            // SAFETY: `buf` is valid for `buf.len()` bytes of reads; `fd` is a valid socket descriptor.
             unsafe { sys_send(fd.native(), buf.as_ptr().cast(), buf.len(), flags) },
             Tag::send
         );
@@ -3167,8 +3250,11 @@ mod posix_impl {
             // O_NONBLOCK via GETFL→OR→SETFL (don't clobber existing flags).
             if nonblock {
                 for &fd in &fds {
+                    // SAFETY: `fd` is a freshly-created socket from `socketpair`; F_GETFL/F_SETFL
+                    // only reads/writes the file-status flags.
                     let fl = unsafe { libc::fcntl(fd, libc::F_GETFL) };
                     if fl < 0
+                        // SAFETY: same fd; F_SETFL with O_NONBLOCK is always valid.
                         || unsafe { libc::fcntl(fd, libc::F_SETFL, fl | libc::O_NONBLOCK) } < 0
                     {
                         return close_both(Error::from_code_int(last_errno(), Tag::fcntl));
@@ -3220,6 +3306,7 @@ mod posix_impl {
         }
         pub fn clonefile_(from: &ZStr, to: &ZStr) -> Maybe<()> {
             check_p!(
+                // SAFETY: `from` and `to` are valid NUL-terminated C strings; flags = 0 is valid.
                 unsafe { clonefile(from.as_ptr(), to.as_ptr(), 0) },
                 Tag::clonefile,
                 from
@@ -3228,6 +3315,8 @@ mod posix_impl {
         }
         pub fn clonefileat_(from_dir: Fd, from: &ZStr, to_dir: Fd, to: &ZStr) -> Maybe<()> {
             check_p!(
+                // SAFETY: `from`/`to` are valid NUL-terminated C strings; `from_dir`/`to_dir` are
+                // valid open directory descriptors; flags = 0 is valid.
                 unsafe {
                     clonefileat(
                         from_dir.native(),
@@ -3244,6 +3333,8 @@ mod posix_impl {
         }
         pub fn copyfile_(from: &ZStr, to: &ZStr, flags: u32) -> Maybe<()> {
             check_p!(
+                // SAFETY: `from`/`to` are valid NUL-terminated C strings; state is null (no
+                // copyfile_state_t); `flags` is a caller-supplied bitmask.
                 unsafe { copyfile(from.as_ptr(), to.as_ptr(), core::ptr::null_mut(), flags) },
                 Tag::copyfile,
                 from
@@ -3273,6 +3364,8 @@ mod posix_impl {
         fd: Fd,
         off: i64,
     ) -> Maybe<*mut u8> {
+        // SAFETY: all arguments are caller-supplied; `addr` may be null (kernel chooses address);
+        // `fd` is a valid open descriptor or -1 for anonymous mappings; `len` > 0.
         let p = unsafe { libc::mmap(addr.cast(), len, prot, flags, fd.native(), off) };
         if p == libc::MAP_FAILED {
             return Err(err_with(Tag::mmap));
@@ -3280,6 +3373,8 @@ mod posix_impl {
         Ok(p.cast())
     }
     pub fn munmap(ptr: *mut u8, len: usize) -> Maybe<()> {
+        // SAFETY: `ptr` was returned by a previous `mmap` call and `len` matches; no other
+        // references to this mapping must exist after this returns.
         check!(unsafe { libc::munmap(ptr.cast(), len) }, Tag::munmap);
         Ok(())
     }
@@ -3414,6 +3509,8 @@ mod posix_impl {
     pub fn sendfile(src: Fd, dest: Fd, len: usize) -> Maybe<usize> {
         let len = len.min(i32::MAX as usize - 1);
         loop {
+            // SAFETY: `src`/`dest` are valid open file descriptors; offset is null (advance
+            // fd position automatically); `len` is clamped to < 2 GB to avoid EINVAL.
             let rc =
                 unsafe { libc::sendfile(dest.native(), src.native(), core::ptr::null_mut(), len) };
             if rc < 0 {
