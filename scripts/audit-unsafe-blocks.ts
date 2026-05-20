@@ -33,7 +33,12 @@
 //
 // Output stable across runs — suitable for git-tracked baselines.
 
-const UNSAFE_OPEN = /^[ \t]*(?:[a-zA-Z_]\w*\s*[:=]\s*.*|let\s+\w.*[:=]\s*|return\s+|.*[=({,]\s*)?unsafe\s*\{/;
+// Matches an `unsafe { … }` block opener. Anchored to require `unsafe`
+// either at line start (modulo whitespace) or immediately after a syntactic
+// boundary (`=`, `(`, `{`, `,`, `;`, `return`, `=>`, `&`, `*`). Deliberately
+// strict: the previous wildcard form `.*[=({,]` could match doc-comment
+// prose like `// uses unsafe { ... }`, inflating the count.
+const UNSAFE_OPEN = /(?:^[ \t]*|[=({,;]\s*|=>\s*|&\s*|\*\s*|\breturn\s+)unsafe\s*\{/;
 const SAFETY = /^[ \t]*(?:\/\/\s*SAFETY:|\/\*\s*SAFETY:|\/\/!\s*SAFETY:)/i;
 const SKIP_PARENT = /^[ \t]*(?:pub\s+)?(?:async\s+)?unsafe\s+(?:fn|impl|trait|extern)\b/;
 const LOOKBACK = 4;
@@ -44,18 +49,16 @@ function audit(root: string): { total: number; flagged: Hit[] } {
   const total = { n: 0 };
   const flagged: Hit[] = [];
   const glob = new Bun.Glob("**/*.rs");
+  const fs = require("fs") as typeof import("fs");
 
   for (const rel of glob.scanSync({ cwd: root, onlyFiles: true })) {
     const file = `${root}/${rel}`;
     let text: string;
     try {
-      text = Bun.file(file).text() as unknown as string;
+      text = fs.readFileSync(file, "utf8");
     } catch {
       continue;
     }
-    // Bun.file.text() is async — fall back to sync read via Node's fs for
-    // simplicity (this script is fast enough that sync IO doesn't matter).
-    text = require("fs").readFileSync(file, "utf8");
     const lines = text.split("\n");
 
     for (let i = 0; i < lines.length; i++) {
