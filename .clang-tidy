@@ -1,9 +1,26 @@
-WarningsAsErrors: "*"
+WarningsAsErrors: "clang-analyzer-*"
 FormatStyle: webkit
+# Checks below are split into two groups:
+#   1. `clang-analyzer-*` — already enabled, promoted to errors above. Path-sensitive
+#      bug-finding (use-after-free, null-deref, double-free); the existing baseline.
+#   2. `bugprone-*` / `cppcoreguidelines-pro-type-*` — new in this commit. Surface
+#      the ~549 unmarked `reinterpret_cast`/`const_cast` and the alignment/aliasing
+#      footguns that the migration brought across from the Zig era. Warn-only:
+#      `WarningsAsErrors` deliberately scopes to `clang-analyzer-*` so these don't
+#      break CI while the JSC bindings annotate.
 Checks: >
   -*,
   clang-analyzer-*,
-  -clang-analyzer-optin.core.EnumCastOutOfRange
-  -clang-analyzer-webkit.UncountedLambdaCapturesChecker
-  -clang-analyzer-optin.core.EnumCastOutOfRange
-  -clang-analyzer-webkit.RefCntblBaseVirtualDtor
+  -clang-analyzer-optin.core.EnumCastOutOfRange,
+  -clang-analyzer-webkit.UncountedLambdaCapturesChecker,
+  -clang-analyzer-webkit.RefCntblBaseVirtualDtor,
+  bugprone-misplaced-widening-cast,
+  bugprone-undefined-memory-manipulation,
+  bugprone-unchecked-optional-access,
+  bugprone-incorrect-roundings,
+  bugprone-sizeof-expression,
+  bugprone-string-integer-assignment,
+  bugprone-suspicious-memset-usage,
+  cppcoreguidelines-pro-type-reinterpret-cast,
+  cppcoreguidelines-pro-type-const-cast,
+  cppcoreguidelines-pro-type-cstyle-cast,
