@@ -291,24 +291,32 @@ macro_rules! size_dispatch {
             1 => {
                 type $A = AtomicU8;
                 type $I = u8;
+                // SAFETY: `$p` is 8-aligned (from `_align: [AtomicU64; 0]`),
+                // satisfying `AtomicU8` (align 1); live for the enclosing ref.
                 let $a = unsafe { &*($p as *const $A) };
                 $body
             }
             2 => {
                 type $A = AtomicU16;
                 type $I = u16;
+                // SAFETY: same as the 1-byte arm; 8-byte alignment satisfies
+                // `AtomicU16`'s 2-byte alignment requirement.
                 let $a = unsafe { &*($p as *const $A) };
                 $body
             }
             4 => {
                 type $A = AtomicU32;
                 type $I = u32;
+                // SAFETY: same as the 1-byte arm; 8-byte alignment satisfies
+                // `AtomicU32`'s 4-byte alignment requirement.
                 let $a = unsafe { &*($p as *const $A) };
                 $body
             }
             8 => {
                 type $A = AtomicU64;
                 type $I = u64;
+                // SAFETY: same as the 1-byte arm; `_align: [AtomicU64; 0]`
+                // guarantees exactly 8-byte alignment, matching `AtomicU64`.
                 let $a = unsafe { &*($p as *const $A) };
                 $body
             }
@@ -327,6 +335,9 @@ pub unsafe fn _dispatch_load<T: Copy>(p: *mut T, ord: Ordering) -> T {
 #[doc(hidden)]
 #[inline(always)]
 pub unsafe fn _dispatch_store<T: Copy>(p: *mut T, v: T, ord: Ordering) {
+    // SAFETY: `T: Atom` (via `unsafe_impl_atom!`) guarantees no padding and
+    // `size_of::<T>() == size_of::<I>()` (enforced by the enclosing
+    // `size_dispatch!` arm), so reinterpreting `v: T` as `I` is sound.
     size_dispatch!(T, p, |a: A, I| a.store(unsafe { xmute::<T, I>(v) }, ord))
 }
 #[doc(hidden)]
@@ -347,12 +358,20 @@ pub unsafe fn _dispatch_cas<T: Copy>(
 ) -> Result<T, T> {
     size_dispatch!(T, p, |a: A, I| {
         match a.compare_exchange(
+            // SAFETY: `T: Atom` guarantees no padding; `size_of::<T>() ==
+            // size_of::<I>()` (enforced by the enclosing `size_dispatch!`
+            // arm), so reinterpreting `T` as `I` is sound.
             unsafe { xmute::<T, I>(cur) },
+            // SAFETY: same as the `cur` cast above.
             unsafe { xmute::<T, I>(new) },
             s,
             f,
         ) {
+            // SAFETY: `x` was produced by the atomic op on a cell that only
+            // ever holds valid `T` bit-patterns, so reinterpreting `I` as
+            // `T` is sound.
             Ok(x) => Ok(unsafe { xmute::<I, T>(x) }),
+            // SAFETY: same as the `Ok` arm above.
             Err(x) => Err(unsafe { xmute::<I, T>(x) }),
         }
     })
@@ -372,14 +391,19 @@ unsafe_impl_atom!(
 unsafe impl<U> Atom for *mut U {
     #[inline]
     unsafe fn _atomic_load(p: *mut Self, ord: Ordering) -> Self {
+        // SAFETY: `*mut U` and `AtomicPtr<U>` have the same layout
+        // (pointer-sized, no padding). `p` is 8-aligned and points to a live
+        // `*mut U` cell forwarded from `AtomicCell`.
         unsafe { (*(p as *const AtomicPtr<U>)).load(ord) }
     }
     #[inline]
     unsafe fn _atomic_store(p: *mut Self, v: Self, ord: Ordering) {
+        // SAFETY: same cast as `_atomic_load`; `p` is 8-aligned and live.
         unsafe { (*(p as *const AtomicPtr<U>)).store(v, ord) }
     }
     #[inline]
     unsafe fn _atomic_swap(p: *mut Self, v: Self, ord: Ordering) -> Self {
+        // SAFETY: same cast as `_atomic_load`; `p` is 8-aligned and live.
         unsafe { (*(p as *const AtomicPtr<U>)).swap(v, ord) }
     }
     #[inline]
@@ -390,6 +414,7 @@ unsafe impl<U> Atom for *mut U {
         s: Ordering,
         f: Ordering,
     ) -> Result<Self, Self> {
+        // SAFETY: same cast as `_atomic_load`; `p` is 8-aligned and live.
         unsafe { (*(p as *const AtomicPtr<U>)).compare_exchange(cur, new, s, f) }
     }
 }

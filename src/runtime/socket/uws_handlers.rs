@@ -355,27 +355,35 @@ impl<const SSL: bool> RawSocketEvents<SSL> for websocket_upgrade_client::NewHttp
     const HAS_ON_OPEN: bool = true;
 
     unsafe fn on_open(this: *mut Self, s: NewSocketHandler<SSL>) {
+        // SAFETY: `this` is a live heap-allocated `NewHttpUpgradeClient`; see `on_handshake`.
         unsafe { Self::handle_open(this, s) }
     }
     unsafe fn on_data(this: *mut Self, s: NewSocketHandler<SSL>, data: &[u8]) {
+        // SAFETY: `this` is a live heap-allocated `NewHttpUpgradeClient`; see `on_handshake`.
         unsafe { Self::handle_data(this, s, data) }
     }
     unsafe fn on_writable(this: *mut Self, s: NewSocketHandler<SSL>) {
+        // SAFETY: `this` is a live heap-allocated `NewHttpUpgradeClient`; see `on_handshake`.
         unsafe { Self::handle_writable(this, s) }
     }
     unsafe fn on_close(this: *mut Self, s: NewSocketHandler<SSL>, code: i32, reason: *mut c_void) {
+        // SAFETY: `this` is a live heap-allocated `NewHttpUpgradeClient`; see `on_handshake`.
         unsafe { Self::handle_close(this, s, code, reason) }
     }
     unsafe fn on_timeout(this: *mut Self, s: NewSocketHandler<SSL>) {
+        // SAFETY: `this` is a live heap-allocated `NewHttpUpgradeClient`; see `on_handshake`.
         unsafe { Self::handle_timeout(this, s) }
     }
     unsafe fn on_long_timeout(this: *mut Self, s: NewSocketHandler<SSL>) {
+        // SAFETY: `this` is a live heap-allocated `NewHttpUpgradeClient`; see `on_handshake`.
         unsafe { Self::handle_timeout(this, s) }
     }
     unsafe fn on_end(this: *mut Self, s: NewSocketHandler<SSL>) {
+        // SAFETY: `this` is a live heap-allocated `NewHttpUpgradeClient`; see `on_handshake`.
         unsafe { Self::handle_end(this, s) }
     }
     unsafe fn on_connect_error(this: *mut Self, s: NewSocketHandler<SSL>, code: i32) {
+        // SAFETY: `this` is a live heap-allocated `NewHttpUpgradeClient`; see `on_handshake`.
         unsafe { Self::handle_connect_error(this, s, code) }
     }
     unsafe fn on_handshake(
@@ -384,6 +392,8 @@ impl<const SSL: bool> RawSocketEvents<SSL> for websocket_upgrade_client::NewHttp
         ok: i32,
         err: bun_uws::us_bun_verify_error_t,
     ) {
+        // SAFETY: `this` is a live heap-allocated `NewHttpUpgradeClient` supplied
+        // by the uws trampoline via `RawPtrHandler`; the caller upholds pointer validity.
         unsafe { Self::handle_handshake(this, s, ok, err) }
     }
 }
@@ -392,24 +402,31 @@ impl<const SSL: bool> RawSocketEvents<SSL> for websocket_client::WebSocket<SSL> 
     // Zig: no `onOpen` decl — adoption of an already-connected socket.
 
     unsafe fn on_data(this: *mut Self, _s: NewSocketHandler<SSL>, data: &[u8]) {
+        // SAFETY: `this` is a live heap-allocated `WebSocket`; see `on_handshake`.
         unsafe { Self::handle_data(this, data) }
     }
     unsafe fn on_writable(this: *mut Self, s: NewSocketHandler<SSL>) {
+        // SAFETY: `this` is a live heap-allocated `WebSocket`; see `on_handshake`.
         unsafe { (*this).handle_writable(s) }
     }
     unsafe fn on_close(this: *mut Self, s: NewSocketHandler<SSL>, code: i32, reason: *mut c_void) {
+        // SAFETY: `this` is a live heap-allocated `WebSocket`; see `on_handshake`.
         unsafe { (*this).handle_close(s, code, reason) }
     }
     unsafe fn on_timeout(this: *mut Self, s: NewSocketHandler<SSL>) {
+        // SAFETY: `this` is a live heap-allocated `WebSocket`; see `on_handshake`.
         unsafe { (*this).handle_timeout(s) }
     }
     unsafe fn on_long_timeout(this: *mut Self, s: NewSocketHandler<SSL>) {
+        // SAFETY: `this` is a live heap-allocated `WebSocket`; see `on_handshake`.
         unsafe { (*this).handle_timeout(s) }
     }
     unsafe fn on_end(this: *mut Self, s: NewSocketHandler<SSL>) {
+        // SAFETY: `this` is a live heap-allocated `WebSocket`; see `on_handshake`.
         unsafe { (*this).handle_end(s) }
     }
     unsafe fn on_connect_error(this: *mut Self, s: NewSocketHandler<SSL>, code: i32) {
+        // SAFETY: `this` is a live heap-allocated `WebSocket`; see `on_handshake`.
         unsafe { (*this).handle_connect_error(s, code) }
     }
     unsafe fn on_handshake(
@@ -418,6 +435,8 @@ impl<const SSL: bool> RawSocketEvents<SSL> for websocket_client::WebSocket<SSL> 
         ok: i32,
         err: bun_uws::us_bun_verify_error_t,
     ) {
+        // SAFETY: `this` is a live heap-allocated `WebSocket` passed by the uws
+        // trampoline via `RawPtrHandler`; the caller upholds pointer validity.
         unsafe { (*this).handle_handshake(s, ok, err) }
     }
 }
