@@ -1,4 +1,5 @@
 pub use crate::mysql::protocol::character_set::CharacterSet;
+use strum::IntoStaticStr;
 
 // MySQL field types
 // https://dev.mysql.com/doc/dev/mysql-server/latest/binary__log__types_8h.html#a8935f33b06a3a88ba403c63acd806920
