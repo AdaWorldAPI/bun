@@ -203,6 +203,20 @@ ptr_cast_constness = "warn"
 ref_as_ptr = "warn"
 borrow_as_ptr = "warn"
 
+# ── Unsafe hygiene (warn-only; promotion to deny is per-crate, opt-in) ─────
+# Bun's Rust side currently sits at ~10.5k `unsafe` blocks with ~10.7k
+# `// SAFETY:` comments — a healthy 1.01 ratio overall. These lints surface
+# the small undocumented residue and the alignment/transmute footguns that
+# the C++/Zig-era patterns brought across the migration.
+#
+# `warn` (not `deny`) is intentional: WarningsAsErrors is not workspace-wide
+# here, so this is a visibility signal, not a CI break. Lifted to `deny`
+# crate-by-crate as each crate's residue is annotated.
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
+transmute_ptr_to_ptr = "warn"
+cast_ptr_alignment = "warn"
+
 [workspace.dependencies]
 rust-argon2 = "3.0"
 bcrypt = "0.19"
