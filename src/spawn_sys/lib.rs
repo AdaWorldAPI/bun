@@ -20,6 +20,10 @@
 //! See `docs/SPAWN_SYS_PROPOSAL.md` for the full crate-graph rationale.
 
 #![allow(dead_code)]
+// All 27 `unsafe { … }` blocks in this crate carry a `// SAFETY:` comment;
+// deny here to prevent regression. Workspace baseline is `warn` (see
+// `[workspace.lints.clippy]` in the repo root `Cargo.toml`).
+#![deny(clippy::undocumented_unsafe_blocks)]
 
 use core::ffi::c_char;
 
