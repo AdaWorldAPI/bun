@@ -444,7 +444,10 @@ pub mod lib_uv_backend {
             this.get_or_put_into_pending_cache(key, PendingCacheField::PendingHostCacheNative);
         if let CacheHit::Inflight(inflight) = cache {
             let dns_lookup = DNSLookup::init(this.as_ctx_ptr(), global_this);
+            // SAFETY: `inflight` is a live PendingCacheKey inside the resolver's hive;
+            // `dns_lookup` is the freshly heap-allocated DNSLookup node just returned by `init`.
             unsafe { (*inflight).append(dns_lookup) };
+            // SAFETY: `dns_lookup` is still live; its `promise` is a JSPromiseStrong rooted in the GC.
             return Ok(unsafe { (*dns_lookup).promise.value() });
         }
 
@@ -1100,8 +1103,12 @@ impl GetNameInfoRequest {
             },
             tail: ptr::null_mut(),
         }));
+        // SAFETY: `request` is the freshly heap-allocated GetNameInfoRequest; `head` is an
+        // embedded field so `&raw mut (*request).head` is valid for the lifetime of the allocation.
         unsafe { (*request).tail = &raw mut (*request).head };
         if let LookupCacheHit::New(new) = cache {
+            // SAFETY: `request` is the live heap allocation just created; `resolver` is a valid
+            // back-ptr; `new` is a live PendingCacheKey slot inside the resolver's hive array.
             unsafe {
                 (*request).resolver_for_caching = resolver;
                 let pos = (*resolver.unwrap())
@@ -1123,6 +1130,8 @@ impl GetNameInfoRequest {
         timeout: i32,
         result: Option<c_ares::struct_nameinfo>,
     ) {
+        // SAFETY: `this` is the live heap-allocated GetNameInfoRequest registered with c-ares;
+        // c-ares fires this callback exactly once; `resolver_for_caching` is a valid back-ptr or None.
         unsafe {
             if let Some(resolver) = (*this).resolver_for_caching {
                 scopeguard::defer! { (*resolver).request_completed() };
@@ -1196,6 +1205,9 @@ pub mod get_addr_info_request {
 
     impl PendingCacheKey {
         pub fn append(&mut self, dns_lookup: *mut DNSLookup) {
+            // SAFETY: `self.lookup` is the live head GetAddrInfoRequest; `tail` was
+            // initialised to `&raw mut head` in `GetAddrInfoRequest::init` and updated
+            // on each append; `dns_lookup` is a freshly allocated node.
             unsafe {
                 let tail = (*self.lookup).tail;
                 (*tail).next = NonNull::new(dns_lookup);
@@ -1254,6 +1266,9 @@ pub mod get_addr_info_request {
                 unreachable!();
             }
             #[cfg(target_os = "macos")]
+            // SAFETY: `this` is the live GetAddrInfoRequest whose mach port received an event;
+            // `machport` was stored in `lookup_libinfo`; `getaddrinfo_async_handle_reply` is a
+            // function pointer resolved from libinfo at startup and is non-null here.
             unsafe {
                 jsc::mark_binding();
                 if !getaddrinfo_send_reply(
@@ -1525,6 +1540,9 @@ impl GetAddrInfoRequest {
     pub fn then(this: *mut Self, _global: &JSGlobalObject) {
         bun_output::scoped_log!(GetAddrInfoRequest, "then");
         #[cfg(not(windows))]
+        // SAFETY: `this` is the live heap-allocated GetAddrInfoRequest; called once from
+        // the libuv/c-ares completion path after the libc backend has stored its result;
+        // no other reference to `*this` exists at this point.
         unsafe {
             // Take the backend by value: `Success` holds a `Vec<GetAddrInfoResult>`
             // (not `Clone`) that we move into `GetAddrInfoResultAny::List`. The
@@ -1581,6 +1599,9 @@ impl GetAddrInfoRequest {
         result: Option<*mut c_ares::AddrInfo>,
     ) {
         bun_output::scoped_log!(GetAddrInfoRequest, "onCaresComplete");
+        // SAFETY: `this` is the live heap-allocated GetAddrInfoRequest that was registered with
+        // c-ares; the callback fires exactly once (c-ares guarantees this); `resolver_for_caching`
+        // holds a valid back-ptr or None.
         unsafe {
             if let Some(resolver) = (*this).resolver_for_caching {
                 // if (this.cache.entry_cache and result != null and result.?.node != null) {
@@ -1607,6 +1628,9 @@ impl GetAddrInfoRequest {
 
     #[cfg(windows)]
     pub fn on_libuv_complete(uv_info: *mut libuv::uv_getaddrinfo_t) {
+        // SAFETY: `uv_info` is the `uv_getaddrinfo_t` embedded in `GetAddrInfoRequest::backend`
+        // (set via `(*request).backend.as_libc_uv_mut()`); libuv guarantees the handle outlives
+        // this callback; `data` was set to the parent `GetAddrInfoRequest` pointer.
         unsafe {
             let retcode = (*uv_info).retcode.int();
             bun_output::scoped_log!(GetAddrInfoRequest, "onLibUVComplete: status={}", retcode);
@@ -1792,6 +1816,8 @@ impl CAresReverse {
     /// exact pointer returned by `heap::alloc` in `init()`. Head nodes (`!allocated`)
     /// are dropped by their owner; this is a no-op for them.
     pub unsafe fn destroy(this: *mut Self) {
+        // SAFETY: caller contract (see doc comment); `heap::take` reclaims ownership and
+        // drops exactly once. Head nodes (allocated==false) are owned by their parent struct.
         unsafe {
             if (*this).allocated {
                 drop(bun_core::heap::take(this));
@@ -1940,6 +1966,8 @@ impl<T: CAresRecordType> CAresLookup<T> {
     /// exact pointer returned by `heap::alloc` in `new()`. Head nodes (`!allocated`)
     /// are dropped by their owner; this is a no-op for them.
     pub unsafe fn destroy(this: *mut Self) {
+        // SAFETY: caller contract (see doc comment); `heap::take` reclaims ownership and
+        // drops exactly once. Head nodes (allocated==false) are owned by their parent struct.
         unsafe {
             if (*this).allocated {
                 drop(bun_core::heap::take(this));
@@ -2165,6 +2193,8 @@ impl Drop for GlobalData {
         // value field — open-code the channel teardown so the c-ares state
         // frees when this box drops in `deinit_runtime_state`.
         if let Some(channel) = self.resolver.channel.take() {
+            // SAFETY: `channel` was returned by `ares_init_options` during Resolver setup;
+            // `take()` ensures this is the unique owner; no further use of the channel occurs.
             unsafe { c_ares::Channel::destroy(channel) };
         }
     }
@@ -2615,6 +2645,9 @@ pub mod internal {
     pub fn register_quic(request: *mut Request, pc: *mut bun_http::H3::PendingConnect) {
         let guard = global_cache().lock();
         let owner = DNSRequestOwner::Quic(pc);
+        // SAFETY: `request` is a live cache entry; the global cache lock is held, providing
+        // exclusive access to `result` and `notify`. Guard is dropped before `notify` to
+        // avoid re-entrancy deadlock (the Quic notify path re-acquires the lock).
         unsafe {
             if (*request).result.is_some() {
                 drop(guard);
