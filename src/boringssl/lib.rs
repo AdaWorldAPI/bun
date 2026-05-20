@@ -4,6 +4,9 @@
 #![allow(unused, static_mut_refs)]
 #![warn(unused_must_use)]
 #![warn(unreachable_pub)]
+// All 9 `unsafe { … }` blocks in this crate carry a `// SAFETY:` comment;
+// deny here to prevent regression. Workspace baseline is `warn`.
+#![deny(clippy::undocumented_unsafe_blocks)]
 use core::ffi::CStr;
 use core::ffi::{c_char, c_int, c_uint, c_void};
 use core::ptr;
