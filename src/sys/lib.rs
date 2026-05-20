@@ -904,6 +904,7 @@ pub fn lstatat(fd: impl AsFd, path: &ZStr) -> Result<Stat> {
             )
         };
         if rc == 0 {
+            // SAFETY: `rc == 0` means the syscall succeeded and the kernel wrote all fields of `st`.
             Ok(unsafe { st.assume_init() })
         } else {
             // sys.zig:877 — `lstatat` tags as `.fstatat`.
@@ -1838,10 +1839,12 @@ mod posix_impl {
     unsafe fn sys_write(fd: i32, buf: *const libc::c_void, n: usize) -> isize {
         #[cfg(target_os = "macos")]
         {
+            // SAFETY: outer `unsafe fn` propagates the syscall's safety contract; thin forward.
             unsafe { super::nocancel::write(fd, buf, n) }
         }
         #[cfg(not(target_os = "macos"))]
         {
+            // SAFETY: outer `unsafe fn` propagates the syscall's safety contract; thin forward.
             unsafe { libc::write(fd, buf, n) }
         }
     }
@@ -1850,10 +1853,12 @@ mod posix_impl {
     unsafe fn sys_pread(fd: i32, buf: *mut libc::c_void, n: usize, off: i64) -> isize {
         #[cfg(target_os = "macos")]
         {
+            // SAFETY: outer `unsafe fn` propagates the syscall's safety contract; thin forward.
             unsafe { super::nocancel::pread(fd, buf, n, off) }
         }
         #[cfg(not(target_os = "macos"))]
         {
+            // SAFETY: outer `unsafe fn` propagates the syscall's safety contract; thin forward.
             unsafe { libc::pread(fd, buf, n, off) }
         }
     }
@@ -1862,10 +1867,12 @@ mod posix_impl {
     unsafe fn sys_pwrite(fd: i32, buf: *const libc::c_void, n: usize, off: i64) -> isize {
         #[cfg(target_os = "macos")]
         {
+            // SAFETY: outer `unsafe fn` propagates the syscall's safety contract; thin forward.
             unsafe { super::nocancel::pwrite(fd, buf, n, off) }
         }
         #[cfg(not(target_os = "macos"))]
         {
+            // SAFETY: outer `unsafe fn` propagates the syscall's safety contract; thin forward.
             unsafe { libc::pwrite(fd, buf, n, off) }
         }
     }
@@ -1873,6 +1880,8 @@ mod posix_impl {
     unsafe fn sys_recv(fd: i32, buf: *mut libc::c_void, n: usize, flags: i32) -> isize {
         #[cfg(target_os = "macos")]
         {
+            // SAFETY: outer `unsafe fn` propagates the syscall's safety contract; thin forward.
+            // `src_addr` and `addrlen` are null (discard sender address).
             unsafe {
                 super::nocancel::recvfrom(
                     fd,
@@ -1886,6 +1895,7 @@ mod posix_impl {
         }
         #[cfg(not(target_os = "macos"))]
         {
+            // SAFETY: outer `unsafe fn` propagates the syscall's safety contract; thin forward.
             unsafe { libc::recv(fd, buf, n, flags) }
         }
     }
@@ -1893,10 +1903,13 @@ mod posix_impl {
     unsafe fn sys_send(fd: i32, buf: *const libc::c_void, n: usize, flags: i32) -> isize {
         #[cfg(target_os = "macos")]
         {
+            // SAFETY: outer `unsafe fn` propagates the syscall's safety contract; thin forward.
+            // `dest_addr` is null and `addrlen` is 0 (connected socket, no destination needed).
             unsafe { super::nocancel::sendto(fd, buf, n, flags, core::ptr::null(), 0) }
         }
         #[cfg(not(target_os = "macos"))]
         {
+            // SAFETY: outer `unsafe fn` propagates the syscall's safety contract; thin forward.
             unsafe { libc::send(fd, buf, n, flags) }
         }
     }
@@ -6128,6 +6141,8 @@ impl DynLib {
         // its size cannot be checked at the definition site; the `const` assert
         // above enforces `size_of::<T>() == size_of::<*mut c_void>()` at
         // monomorphisation. Same contract as Zig `bun.cast(T, ptr)`.
+        // SAFETY: `p` is non-null (returned by `dlsym_impl`); size equality is verified by the
+        // `const` assert; `T` must be a valid fn-pointer or pointer type (caller contract).
         Some(unsafe { core::mem::transmute_copy::<*mut c_void, T>(&p) })
     }
     pub fn close(self) {
@@ -6228,6 +6243,9 @@ macro_rules! dlsym_with_handle {
         if p.is_null() {
             None
         } else {
+            // SAFETY: `p` is non-null and was written by `dlsym_impl` inside the `Once` block;
+            // size equality is verified by the `const` assert above; `$T` must be a fn-pointer or
+            // pointer type (caller contract).
             Some(unsafe { ::core::mem::transmute_copy::<*mut ::core::ffi::c_void, $T>(&p) })
         }
     }};

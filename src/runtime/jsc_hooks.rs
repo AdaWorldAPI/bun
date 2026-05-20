@@ -1782,26 +1782,29 @@ fn console_print_runtime_object_inner<const C: bool>(
         };
     }
 
-    // SAFETY: `as_` returns a non-null `*mut T` only when `value` wraps a
-    // live `T` cell; conservative stack scan keeps `value` alive for the
-    // duration of each branch.
+    // `as_` returns a non-null `*mut T` only when `value` wraps a live `T`
+    // cell; conservative stack scan keeps `value` alive for each branch.
     if let Some(response) = value.as_::<Response>() {
         let mut w = AsFmt::new(writer_);
+        // SAFETY: `response` is a non-null GC-live `*mut Response` from `as_`.
         let _ = unsafe { &mut *response }.write_format::<_, _, C>(formatter, &mut w);
         return Ok(true);
     }
     if let Some(request) = value.as_::<Request>() {
         let mut w = AsFmt::new(writer_);
+        // SAFETY: `request` is a non-null GC-live `*mut Request` from `as_`.
         let _ = unsafe { &mut *request }.write_format::<_, _, C>(value, formatter, &mut w);
         return Ok(true);
     }
     if let Some(build) = value.as_::<BuildArtifact>() {
         let mut w = AsFmt::new(writer_);
+        // SAFETY: `build` is a non-null GC-live `*mut BuildArtifact` from `as_`.
         let _ = unsafe { &*build }.write_format::<_, _, C>(formatter, &mut w);
         return Ok(true);
     }
     if let Some(blob) = value.as_::<Blob>() {
         let mut w = AsFmt::new(writer_);
+        // SAFETY: `blob` is a non-null GC-live `*mut Blob` from `as_`.
         let _ = unsafe { &mut *blob }.write_format::<_, _, C>(formatter, &mut w);
         return Ok(true);
     }
@@ -2008,6 +2011,7 @@ fn transpile_source_code_inner(
     // `extra.loader` and re-enter without borrowck seeing aliased `&mut`.
     let path: &Fs::Path = unsafe { &(*extra).path };
     let loader: Loader = unsafe { &*extra }.loader;
+    // SAFETY: `extra` is a live `TranspileExtra` (fn contract); read-only field.
     let module_type: ModuleType = unsafe { &*extra }.module_type;
 
     let disable_transpilying = args.flags.disable_transpiling();
@@ -2191,12 +2195,14 @@ fn transpile_source_code_inner(
                 let import_watcher: *mut bun_jsc::ImportWatcher =
                     unsafe { &*jsc_vm }.bun_watcher.cast();
                 if !import_watcher.is_null() {
-                    // SAFETY: non-null per check above. The watchlist *is*
-                    // mutated cross-thread (the watcher thread's
-                    // `flush_evictions` closes fds and `swap_remove`s), so
-                    // snapshot under the watcher mutex — see
+                    // Non-null per check above. The watchlist *is* mutated
+                    // cross-thread (the watcher thread's `flush_evictions`
+                    // closes fds and `swap_remove`s), so snapshot under the
+                    // watcher mutex — see
                     // `ImportWatcher::snapshot_fd_and_package_json` doc for
                     // the EBADF race this closes (port improves on Zig spec).
+                    // SAFETY: `import_watcher` is non-null (checked above);
+                    // cast recovers the concrete `ImportWatcher` type.
                     let iw = unsafe { &*import_watcher };
                     (fd, package_json) = iw.snapshot_fd_and_package_json(hash);
                 }
@@ -2246,6 +2252,8 @@ fn transpile_source_code_inner(
             let old_log = unsafe { &*jsc_vm }.transpiler.log;
             let old_log_nn = core::ptr::NonNull::new(old_log).expect("transpiler.log is non-null");
             let args_log_nn = core::ptr::NonNull::new(args.log).expect("args.log is non-null");
+            // SAFETY: `jsc_vm` is the live per-thread VM; swapping the log
+            // pointers is safe here before any parsing begins.
             unsafe {
                 (*jsc_vm).transpiler.log = args.log;
                 (*jsc_vm).transpiler.resolver.log = args_log_nn;
@@ -2332,11 +2340,12 @@ fn transpile_source_code_inner(
             let _fd_guard = scopeguard::guard(
                 (should_close_ptr, input_file_fd_ptr),
                 |(should_close_ptr, input_file_fd_ptr)| {
-                    // SAFETY: `should_close_input_file_fd` / `input_file_fd`
-                    // are declared earlier in this stack frame and outlive
-                    // this guard (locals drop in reverse declaration order);
-                    // the guard runs on the same thread before either is
-                    // destroyed.
+                    // `should_close_input_file_fd` / `input_file_fd` are
+                    // declared earlier in this stack frame and outlive this
+                    // guard (locals drop in reverse declaration order); the
+                    // guard runs on the same thread before either is destroyed.
+                    // SAFETY: both raw pointers point at stack locals in this
+                    // frame that outlive this guard; no other thread touches them.
                     unsafe {
                         if *should_close_ptr && (*input_file_fd_ptr).is_valid() {
                             use bun_sys::FdExt as _;
