@@ -23,4 +23,8 @@ Checks: >
   bugprone-suspicious-memset-usage,
   cppcoreguidelines-pro-type-reinterpret-cast,
   cppcoreguidelines-pro-type-const-cast,
-  cppcoreguidelines-pro-type-cstyle-cast,
+  # NOTE: deliberately NOT enabling `cppcoreguidelines-pro-type-cstyle-cast`.
+  # WebKit-derived bindings use C-style casts pervasively as a stylistic
+  # convention (not a safety hazard), and enabling that check would emit
+  # thousands of warnings that drown the targeted `reinterpret_cast` /
+  # `const_cast` signal the two checks above are meant to surface.
